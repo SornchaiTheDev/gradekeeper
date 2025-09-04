@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -447,6 +448,12 @@ func (m *Master) getAllClients() []ClientInfo {
 	for _, clientInfo := range m.clientsInfo {
 		clients = append(clients, *clientInfo)
 	}
+	
+	// Sort clients by ID for consistent ordering
+	sort.Slice(clients, func(i, j int) bool {
+		return clients[i].ID < clients[j].ID
+	})
+	
 	return clients
 }
 
