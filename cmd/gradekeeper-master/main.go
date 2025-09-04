@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"gradekeeper/internal/templates"
 )
 
 const (
@@ -55,9 +56,16 @@ type Master struct {
 	upgrader          websocket.Upgrader
 	dashboardSecret   string
 	storageFile       string
+	dashboardTemplate *templates.Dashboard
 }
 
 func NewMaster() *Master {
+	// Initialize dashboard template
+	dashboardTemplate, err := templates.NewDashboard()
+	if err != nil {
+		log.Fatalf("Failed to initialize dashboard template: %v", err)
+	}
+
 	m := &Master{
 		clients:         make(map[string]*websocket.Conn),
 		clientsInfo:     make(map[string]*ClientInfo),
@@ -67,8 +75,9 @@ func NewMaster() *Master {
 				return true // Allow all origins for development
 			},
 		},
-		dashboardSecret: generateRandomSecret(),
-		storageFile:     "gradekeeper-clients.json",
+		dashboardSecret:   generateRandomSecret(),
+		storageFile:       "gradekeeper-clients.json",
+		dashboardTemplate: dashboardTemplate,
 	}
 	
 	// Load existing client data
@@ -508,298 +517,19 @@ func generateRandomSecret() string {
 }
 
 func (m *Master) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	// Get the dashboard secret for this session
-	dashboardSecret := m.dashboardSecret
-	
-	// Build HTML with injected dashboard secret
-	html := fmt.Sprintf(`
-<!DOCTYPE html>
-<html>
-<head>
-    <title>GradeKeeper Master Dashboard</title>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        primary: '#2563eb',
-                        success: '#16a34a',
-                        danger: '#dc2626',
-                    }
-                }
-            }
-        }
-    </script>
-</head>
-<body class="bg-gray-50 min-h-screen">
-    <div class="bg-primary text-white p-6 shadow-lg">
-        <div class="flex items-center gap-3">
-            <i data-lucide="graduation-cap" class="w-8 h-8"></i>
-            <div>
-                <h1 class="text-2xl font-bold">GradeKeeper Master Dashboard</h1>
-                <p class="text-blue-100">Manage and control multiple GradeKeeper clients</p>
-            </div>
-        </div>
-    </div>
-
-    <div class="container mx-auto px-6 py-6">
-        <div class="bg-white rounded-lg shadow-sm p-6 mb-6">
-            <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
-                <i data-lucide="settings" class="w-5 h-5"></i>
-                Global Controls
-            </h2>
-            <div class="flex flex-wrap gap-3">
-                <button onclick="setupAll()" class="bg-success hover:bg-green-700 text-white font-semibold px-6 py-3 rounded-lg transition-colors duration-200 flex items-center gap-2 shadow-sm">
-                    <i data-lucide="rocket" class="w-5 h-5"></i>
-                    Setup All (Complete)
-                </button>
-                <button onclick="clearAll()" class="bg-danger hover:bg-red-700 text-white font-semibold px-6 py-3 rounded-lg transition-colors duration-200 flex items-center gap-2 shadow-sm">
-                    <i data-lucide="trash-2" class="w-5 h-5"></i>
-                    Clear All (Complete)
-                </button>
-                <button onclick="refreshClients()" class="bg-gray-600 hover:bg-gray-700 text-white px-4 py-3 rounded-lg transition-colors duration-200 flex items-center gap-2 shadow-sm">
-                    <i data-lucide="refresh-cw" class="w-5 h-5"></i>
-                    Refresh
-                </button>
-            </div>
-        </div>
-
-        <div class="bg-white rounded-lg shadow-sm p-6 mb-6">
-            <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
-                <i data-lucide="monitor" class="w-5 h-5"></i>
-                Connected Clients
-            </h2>
-            <div id="clients" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
-        </div>
-
-        <div class="bg-white rounded-lg shadow-sm p-6">
-            <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
-                <i data-lucide="activity" class="w-5 h-5"></i>
-                Activity Log
-            </h2>
-            <div id="log" class="bg-gray-900 text-green-400 p-4 h-64 overflow-y-auto rounded-lg font-mono text-sm"></div>
-        </div>
-    </div>
-
-    <script>
-        const dashboardSecret = '%s';
-        let ws;
-        
-        // Initialize Lucide icons after DOM is loaded
-        document.addEventListener('DOMContentLoaded', function() {
-            lucide.createIcons();
-        });
-        
-        function connect() {
-            // Use query parameter for dashboard authentication
-            ws = new WebSocket('ws://localhost:8080/ws?dashboard=' + dashboardSecret);
-            
-            ws.onopen = function() {
-                log('Dashboard connected to master server');
-                refreshClients();
-            };
-            
-            ws.onmessage = function(event) {
-                const data = JSON.parse(event.data);
-                
-                switch(data.type) {
-                    case 'dashboard-welcome':
-                        log('Dashboard authenticated successfully');
-                        break;
-                    case 'client-connected':
-                        log('Client connected: ' + data.data.clientId + ' (Total: ' + data.data.totalClients + ')');
-                        refreshClients();
-                        break;
-                    case 'client-disconnected':
-                        log('Client disconnected: ' + data.data.clientId + ' (Total: ' + data.data.totalClients + ')');
-                        refreshClients();
-                        break;
-                    case 'command-sent':
-                        log('Command sent: ' + data.data.action + ' to ' + (data.data.target || 'all') + ' (' + data.data.clientCount + ' clients)');
-                        break;
-                    case 'client_action_update':
-                        log('Client ' + data.data.clientId + ': ' + data.data.action + ' -> ' + data.data.status + 
-                            (data.data.error ? ' (Error: ' + data.data.error + ')' : ''));
-                        refreshClients(); // Refresh to show updated action status
-                        break;
-                    default:
-                        log('Received: ' + JSON.stringify(data));
-                }
-            };
-            
-            ws.onclose = function() {
-                log('Dashboard disconnected from server. Reconnecting...');
-                setTimeout(connect, 1000);
-            };
-        }
-        
-        function sendCommand(action) {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                const command = { action: action, target: 'all' };
-                fetch('/api/command', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(command)
-                });
-                log('Sent command: ' + action + ' to all clients');
-            }
-        }
-        
-        function refreshClients() {
-            fetch('/api/clients')
-                .then(response => response.json())
-                .then(clients => {
-                    const container = document.getElementById('clients');
-                    container.innerHTML = clients.map(client => {
-                        const isConnected = client.status === 'connected';
-                        const hasFailed = client.actionStatus === 'failed';
-                        
-                        // Card colors - red for failed, green for connected, gray for disconnected
-                        const statusColor = hasFailed ? 'border-l-red-500' : (isConnected ? 'border-l-success' : 'border-l-gray-400');
-                        const cardBg = hasFailed ? 'bg-red-50' : 'bg-gray-50';
-                        
-                        const statusBadgeColor = isConnected ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600';
-                        const lastSeenTime = new Date(client.lastSeen).toLocaleString();
-                        const firstSeenTime = new Date(client.firstSeen).toLocaleString();
-                        
-                        // Action status display
-                        const actionDisplay = getActionStatusDisplay(client);
-                        
-                        return '<div class="' + cardBg + ' border border-gray-200 rounded-lg p-4 border-l-4 ' + statusColor + '">' +
-                        '<div class="flex items-center gap-2 mb-2">' +
-                        '<i data-lucide="monitor" class="w-4 h-4 text-gray-600"></i>' +
-                        '<h3 class="font-semibold text-gray-800">' + client.name + '</h3>' +
-                        '</div>' +
-                        '<p class="text-sm text-gray-600 mb-1">ID: <code class="bg-gray-200 px-1 rounded text-xs">' + client.id + '</code></p>' +
-                        '<p class="text-sm text-gray-600 mb-1">Status: <span class="inline-flex items-center px-2 py-1 rounded-full text-xs ' + statusBadgeColor + '">' + client.status + '</span></p>' +
-                        '<p class="text-sm text-gray-600 mb-1">Last Seen: <span class="text-xs">' + lastSeenTime + '</span></p>' +
-                        (client.firstSeen ? '<p class="text-sm text-gray-600 mb-2">First Seen: <span class="text-xs">' + firstSeenTime + '</span></p>' : '<div class="mb-2"></div>') +
-                        actionDisplay +
-                        '<div class="space-y-3">' +
-                        '<div class="flex gap-2">' +
-                        '<button onclick="setupAllForClient(\'' + client.id + '\')" ' + (isConnected ? '' : 'disabled ') + 'class="' + (isConnected ? 'bg-success hover:bg-green-700 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed') + ' text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 flex-1">' +
-                        '<i data-lucide="rocket" class="w-4 h-4"></i>Setup All</button>' +
-                        '<button onclick="clearAllForClient(\'' + client.id + '\')" ' + (isConnected ? '' : 'disabled ') + 'class="' + (isConnected ? 'bg-danger hover:bg-red-700 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed') + ' text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 flex-1">' +
-                        '<i data-lucide="trash-2" class="w-4 h-4"></i>Clear All</button>' +
-                        '</div>' +
-                        '<div class="grid grid-cols-2 gap-2">' +
-                        '<button onclick="sendCommandToClient(\'' + client.id + '\', \'setup\')" ' + (isConnected ? '' : 'disabled ') + 'class="' + (isConnected ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed') + ' text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 justify-center">' +
-                        '<i data-lucide="folder-plus" class="w-4 h-4"></i>Setup</button>' +
-                        '<button onclick="sendCommandToClient(\'' + client.id + '\', \'open-vscode\')" ' + (isConnected ? '' : 'disabled ') + 'class="' + (isConnected ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed') + ' text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 justify-center">' +
-                        '<i data-lucide="code" class="w-4 h-4"></i>VS Code</button>' +
-                        '<button onclick="sendCommandToClient(\'' + client.id + '\', \'open-chrome\')" ' + (isConnected ? '' : 'disabled ') + 'class="' + (isConnected ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed') + ' text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 justify-center">' +
-                        '<i data-lucide="globe" class="w-4 h-4"></i>Chrome</button>' +
-                        '<button onclick="sendCommandToClient(\'' + client.id + '\', \'clear\')" ' + (isConnected ? '' : 'disabled ') + 'class="' + (isConnected ? 'bg-gray-600 hover:bg-gray-700 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed') + ' text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 justify-center">' +
-                        '<i data-lucide="x" class="w-4 h-4"></i>Clear</button>' +
-                        '</div>' +
-                        '</div>' +
-                        '</div>';
-                    }).join('');
-                    // Re-initialize Lucide icons for dynamically added content
-                    lucide.createIcons();
-                });
-        }
-        
-        function sendCommandToClient(clientId, action) {
-            const command = { action: action, target: clientId };
-            fetch('/api/command', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(command)
-            });
-            log('Sent command: ' + action + ' to client ' + clientId);
-        }
-        
-        function getActionStatusDisplay(client) {
-            if (!client.action || !client.actionStatus) {
-                return '<div class="mb-3"></div>'; // No action, just spacing
-            }
-            
-            let statusIcon, statusColor, statusText, statusBg;
-            
-            switch (client.actionStatus) {
-                case 'running':
-                    statusIcon = '<i data-lucide="loader-2" class="w-3 h-3 animate-spin"></i>';
-                    statusColor = 'text-blue-700';
-                    statusBg = 'bg-blue-100 border-blue-200';
-                    statusText = 'Running';
-                    break;
-                case 'success':
-                    statusIcon = '<i data-lucide="check" class="w-3 h-3"></i>';
-                    statusColor = 'text-green-700';
-                    statusBg = 'bg-green-100 border-green-200';
-                    statusText = 'Success';
-                    break;
-                case 'failed':
-                    statusIcon = '<i data-lucide="alert-triangle" class="w-3 h-3"></i>';
-                    statusColor = 'text-red-700';
-                    statusBg = 'bg-red-100 border-red-200';
-                    statusText = 'Failed';
-                    break;
-                default:
-                    return '<div class="mb-3"></div>';
-            }
-            
-            const errorDisplay = client.actionStatus === 'failed' && client.actionError ?
-                '<p class="text-xs text-red-600 mt-1"><strong>Error:</strong> ' + client.actionError + '</p>' : '';
-                
-            return '<div class="mb-3 p-2 border rounded-md ' + statusBg + '">' +
-                   '<div class="flex items-center gap-2 ' + statusColor + '">' +
-                   statusIcon +
-                   '<span class="text-sm font-medium">Action: ' + client.action + '</span>' +
-                   '<span class="text-xs">(' + statusText + ')</span>' +
-                   '</div>' +
-                   errorDisplay +
-                   '</div>';
-        }
-        
-        function setupAll() {
-            log('🚀 Starting complete setup for all clients...');
-            sendCommand('setupAll');
-            log('Sent setupAll command to all clients');
-        }
-        
-        function clearAll() {
-            if (confirm('⚠️ This will clear all environments on all clients. Are you sure?')) {
-                log('💥 Starting complete clear for all clients...');
-                sendCommand('clear');
-                log('✅ Clear command sent to all clients!');
-            }
-        }
-        
-        function setupAllForClient(clientId) {
-            log('🚀 Starting complete setup for client ' + clientId + '...');
-            sendCommandToClient(clientId, 'setupAll');
-            log('Sent setupAll command to client ' + clientId);
-        }
-        
-        function clearAllForClient(clientId) {
-            if (confirm('⚠️ This will clear the environment on client ' + clientId + '. Are you sure?')) {
-                log('💥 Starting complete clear for client ' + clientId + '...');
-                sendCommandToClient(clientId, 'clear');
-                log('✅ Clear command sent to client ' + clientId + '!');
-            }
-        }
-        
-        function log(message) {
-            const logEl = document.getElementById('log');
-            const timestamp = new Date().toLocaleTimeString();
-            logEl.innerHTML += '<div><span class="text-cyan-400">[' + timestamp + ']</span> ' + message + '</div>';
-            logEl.scrollTop = logEl.scrollHeight;
-        }
-        
-        connect();
-        setInterval(refreshClients, 5000); // Refresh every 5 seconds
-    </script>
-</body>
-</html>`, dashboardSecret)
-
 	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(html))
+	
+	// Prepare template data
+	data := templates.DashboardData{
+		DashboardSecret: m.dashboardSecret,
+	}
+	
+	// Render the dashboard template
+	if err := m.dashboardTemplate.Render(w, data); err != nil {
+		log.Printf("Error rendering dashboard template: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
 }
 
 func (m *Master) handleAPICommand(w http.ResponseWriter, r *http.Request) {
