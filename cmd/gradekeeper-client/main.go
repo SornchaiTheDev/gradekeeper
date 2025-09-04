@@ -31,6 +31,8 @@ type Client struct {
 	serverURL string
 	clientID  string
 	done     chan struct{}
+	reconnect chan struct{}
+	retrying  bool
 }
 
 func NewClient(serverURL string) *Client {
@@ -38,6 +40,7 @@ func NewClient(serverURL string) *Client {
 		serverURL: serverURL,
 		clientID:  generateClientID(),
 		done:      make(chan struct{}),
+		reconnect: make(chan struct{}),
 	}
 }
 
@@ -60,14 +63,44 @@ func (c *Client) connect() error {
 	return nil
 }
 
-func (c *Client) listen() {
-	defer close(c.done)
+func (c *Client) connectWithRetry() {
+	backoff := time.Second
+	maxBackoff := 30 * time.Second
+	
+	for {
+		c.retrying = true
+		err := c.connect()
+		if err != nil {
+			log.Printf("Connection failed: %v. Retrying in %v...", err, backoff)
+			time.Sleep(backoff)
+			
+			// Exponential backoff with max limit
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+			continue
+		}
+		
+		// Successfully connected
+		c.retrying = false
+		c.sendStatus("connected")
+		
+		// Start listening for messages
+		go c.listen()
+		break
+	}
+}
 
+func (c *Client) listen() {
 	for {
 		var msg Message
 		err := c.conn.ReadJSON(&msg)
 		if err != nil {
 			log.Printf("WebSocket read error: %v", err)
+			if !c.retrying {
+				c.reconnect <- struct{}{}
+			}
 			return
 		}
 
@@ -201,6 +234,9 @@ func (c *Client) sendResult(result map[string]interface{}) {
 
 	if err := c.conn.WriteJSON(msg); err != nil {
 		log.Printf("Error sending result: %v", err)
+		if !c.retrying {
+			c.reconnect <- struct{}{}
+		}
 	}
 }
 
@@ -216,6 +252,9 @@ func (c *Client) sendStatus(status string) {
 
 	if err := c.conn.WriteJSON(msg); err != nil {
 		log.Printf("Error sending status: %v", err)
+		if !c.retrying {
+			c.reconnect <- struct{}{}
+		}
 	}
 }
 
@@ -259,30 +298,24 @@ func main() {
 	fmt.Printf("Running in client mode, connecting to: %s\n", *serverURL)
 
 	client := NewClient(*serverURL)
-	err := client.connect()
-	if err != nil {
-		log.Fatalf("Failed to connect to master server: %v", err)
-	}
 	defer client.close()
-
-	// Send initial status
-	client.sendStatus("connected")
 
 	// Handle interrupt signal
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 
-	// Start listening for messages
-	go client.listen()
+	// Initial connection
+	client.connectWithRetry()
 
-	// Keep client running
+	// Keep client running with auto-reconnect
 	for {
 		select {
-		case <-client.done:
-			log.Println("Connection closed")
-			return
+		case <-client.reconnect:
+			log.Println("Connection lost, attempting to reconnect...")
+			client.connectWithRetry()
 		case <-interrupt:
 			log.Println("Interrupt received, closing connection...")
+			client.retrying = true
 			client.sendStatus("disconnecting")
 			client.close()
 			return
