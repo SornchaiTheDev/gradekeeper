@@ -256,47 +256,82 @@ func (m *Master) handleDashboard(w http.ResponseWriter, r *http.Request) {
 <html>
 <head>
     <title>GradeKeeper Master Dashboard</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        .header { background: #2196F3; color: white; padding: 20px; margin: -20px -20px 20px -20px; }
-        .clients { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
-        .client { border: 1px solid #ddd; padding: 15px; border-radius: 5px; }
-        .client.connected { border-left: 5px solid #4CAF50; }
-        .controls { margin: 20px 0; }
-        .btn { background: #2196F3; color: white; border: none; padding: 10px 20px; margin: 5px; cursor: pointer; border-radius: 3px; }
-        .btn:hover { background: #1976D2; }
-        .btn.danger { background: #f44336; }
-        .btn.danger:hover { background: #d32f2f; }
-        .log { background: #f5f5f5; padding: 10px; height: 200px; overflow-y: auto; border-radius: 3px; font-family: monospace; }
-    </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#2563eb',
+                        success: '#16a34a',
+                        danger: '#dc2626',
+                    }
+                }
+            }
+        }
+    </script>
 </head>
-<body>
-    <div class="header">
-        <h1>🎓 GradeKeeper Master Dashboard</h1>
-        <p>Manage and control multiple GradeKeeper clients</p>
+<body class="bg-gray-50 min-h-screen">
+    <div class="bg-primary text-white p-6 shadow-lg">
+        <div class="flex items-center gap-3">
+            <i data-lucide="graduation-cap" class="w-8 h-8"></i>
+            <div>
+                <h1 class="text-2xl font-bold">GradeKeeper Master Dashboard</h1>
+                <p class="text-blue-100">Manage and control multiple GradeKeeper clients</p>
+            </div>
+        </div>
     </div>
 
-    <div class="controls">
-        <button class="btn" onclick="sendCommand('setup')">📁 Setup Environment (All)</button>
-        <button class="btn" onclick="sendCommand('open-vscode')">💻 Open VS Code (All)</button>
-        <button class="btn" onclick="sendCommand('open-chrome')">🌐 Open Chrome Incognito (All)</button>
-        <button class="btn danger" onclick="sendCommand('clear')">🧹 Clear Environment (All)</button>
-        <button class="btn" onclick="refreshClients()">🔄 Refresh</button>
-    </div>
+    <div class="container mx-auto px-6 py-6">
+        <div class="bg-white rounded-lg shadow-sm p-6 mb-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                <i data-lucide="settings" class="w-5 h-5"></i>
+                Global Controls
+            </h2>
+            <div class="flex flex-wrap gap-3">
+                <button onclick="setupAll()" class="bg-success hover:bg-green-700 text-white font-semibold px-6 py-3 rounded-lg transition-colors duration-200 flex items-center gap-2 shadow-sm">
+                    <i data-lucide="rocket" class="w-5 h-5"></i>
+                    Setup All (Complete)
+                </button>
+                <button onclick="clearAll()" class="bg-danger hover:bg-red-700 text-white font-semibold px-6 py-3 rounded-lg transition-colors duration-200 flex items-center gap-2 shadow-sm">
+                    <i data-lucide="trash-2" class="w-5 h-5"></i>
+                    Clear All (Complete)
+                </button>
+                <button onclick="refreshClients()" class="bg-gray-600 hover:bg-gray-700 text-white px-4 py-3 rounded-lg transition-colors duration-200 flex items-center gap-2 shadow-sm">
+                    <i data-lucide="refresh-cw" class="w-5 h-5"></i>
+                    Refresh
+                </button>
+            </div>
+        </div>
 
-    <div id="clients-container">
-        <h2>Connected Clients</h2>
-        <div id="clients" class="clients"></div>
-    </div>
+        <div class="bg-white rounded-lg shadow-sm p-6 mb-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                <i data-lucide="monitor" class="w-5 h-5"></i>
+                Connected Clients
+            </h2>
+            <div id="clients" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+        </div>
 
-    <div>
-        <h2>Activity Log</h2>
-        <div id="log" class="log"></div>
+        <div class="bg-white rounded-lg shadow-sm p-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                <i data-lucide="activity" class="w-5 h-5"></i>
+                Activity Log
+            </h2>
+            <div id="log" class="bg-gray-900 text-green-400 p-4 h-64 overflow-y-auto rounded-lg font-mono text-sm"></div>
+        </div>
     </div>
 
     <script>
         const dashboardSecret = '%s';
         let ws;
+        
+        // Initialize Lucide icons after DOM is loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            lucide.createIcons();
+        });
         
         function connect() {
             // Use query parameter for dashboard authentication
@@ -354,16 +389,35 @@ func (m *Master) handleDashboard(w http.ResponseWriter, r *http.Request) {
                 .then(clients => {
                     const container = document.getElementById('clients');
                     container.innerHTML = clients.map(client => 
-                        '<div class="client connected">' +
-                        '<h3>' + client.name + '</h3>' +
-                        '<p>ID: ' + client.id + '</p>' +
-                        '<p>Status: ' + client.status + '</p>' +
-                        '<button class="btn" onclick="sendCommandToClient(\'' + client.id + '\', \'setup\')">Setup</button>' +
-                        '<button class="btn" onclick="sendCommandToClient(\'' + client.id + '\', \'open-vscode\')">VS Code</button>' +
-                        '<button class="btn" onclick="sendCommandToClient(\'' + client.id + '\', \'open-chrome\')">Chrome</button>' +
-                        '<button class="btn danger" onclick="sendCommandToClient(\'' + client.id + '\', \'clear\')">Clear</button>' +
+                        '<div class="bg-gray-50 border border-gray-200 rounded-lg p-4 border-l-4 border-l-success">' +
+                        '<div class="flex items-center gap-2 mb-2">' +
+                        '<i data-lucide="monitor" class="w-4 h-4 text-gray-600"></i>' +
+                        '<h3 class="font-semibold text-gray-800">' + client.name + '</h3>' +
+                        '</div>' +
+                        '<p class="text-sm text-gray-600 mb-1">ID: <code class="bg-gray-200 px-1 rounded text-xs">' + client.id + '</code></p>' +
+                        '<p class="text-sm text-gray-600 mb-4">Status: <span class="inline-flex items-center px-2 py-1 rounded-full text-xs bg-green-100 text-green-800">' + client.status + '</span></p>' +
+                        '<div class="space-y-3">' +
+                        '<div class="flex gap-2">' +
+                        '<button onclick="setupAllForClient(\'' + client.id + '\')" class="bg-success hover:bg-green-700 text-white text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 flex-1">' +
+                        '<i data-lucide="rocket" class="w-4 h-4"></i>Setup All</button>' +
+                        '<button onclick="clearAllForClient(\'' + client.id + '\')" class="bg-danger hover:bg-red-700 text-white text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 flex-1">' +
+                        '<i data-lucide="trash-2" class="w-4 h-4"></i>Clear All</button>' +
+                        '</div>' +
+                        '<div class="grid grid-cols-2 gap-2">' +
+                        '<button onclick="sendCommandToClient(\'' + client.id + '\', \'setup\')" class="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 justify-center">' +
+                        '<i data-lucide="folder-plus" class="w-4 h-4"></i>Setup</button>' +
+                        '<button onclick="sendCommandToClient(\'' + client.id + '\', \'open-vscode\')" class="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 justify-center">' +
+                        '<i data-lucide="code" class="w-4 h-4"></i>VS Code</button>' +
+                        '<button onclick="sendCommandToClient(\'' + client.id + '\', \'open-chrome\')" class="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 justify-center">' +
+                        '<i data-lucide="globe" class="w-4 h-4"></i>Chrome</button>' +
+                        '<button onclick="sendCommandToClient(\'' + client.id + '\', \'clear\')" class="bg-gray-600 hover:bg-gray-700 text-white text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 justify-center">' +
+                        '<i data-lucide="x" class="w-4 h-4"></i>Clear</button>' +
+                        '</div>' +
+                        '</div>' +
                         '</div>'
                     ).join('');
+                    // Re-initialize Lucide icons for dynamically added content
+                    lucide.createIcons();
                 });
         }
         
@@ -377,10 +431,68 @@ func (m *Master) handleDashboard(w http.ResponseWriter, r *http.Request) {
             log('Sent command: ' + action + ' to client ' + clientId);
         }
         
+        function setupAll() {
+            log('🚀 Starting complete setup for all clients...');
+            const commands = ['setup', 'open-vscode', 'open-chrome'];
+            let currentCommand = 0;
+            
+            function executeNext() {
+                if (currentCommand < commands.length) {
+                    const action = commands[currentCommand];
+                    sendCommand(action);
+                    currentCommand++;
+                    
+                    // Wait a bit between commands to avoid overwhelming clients
+                    setTimeout(executeNext, 1000);
+                } else {
+                    log('✅ Complete setup finished for all clients!');
+                }
+            }
+            
+            executeNext();
+        }
+        
+        function clearAll() {
+            if (confirm('⚠️ This will clear all environments on all clients. Are you sure?')) {
+                log('💥 Starting complete clear for all clients...');
+                sendCommand('clear');
+                log('✅ Clear command sent to all clients!');
+            }
+        }
+        
+        function setupAllForClient(clientId) {
+            log('🚀 Starting complete setup for client ' + clientId + '...');
+            const commands = ['setup', 'open-vscode', 'open-chrome'];
+            let currentCommand = 0;
+            
+            function executeNext() {
+                if (currentCommand < commands.length) {
+                    const action = commands[currentCommand];
+                    sendCommandToClient(clientId, action);
+                    currentCommand++;
+                    
+                    // Wait a bit between commands
+                    setTimeout(executeNext, 1000);
+                } else {
+                    log('✅ Complete setup finished for client ' + clientId + '!');
+                }
+            }
+            
+            executeNext();
+        }
+        
+        function clearAllForClient(clientId) {
+            if (confirm('⚠️ This will clear the environment on client ' + clientId + '. Are you sure?')) {
+                log('💥 Starting complete clear for client ' + clientId + '...');
+                sendCommandToClient(clientId, 'clear');
+                log('✅ Clear command sent to client ' + clientId + '!');
+            }
+        }
+        
         function log(message) {
             const logEl = document.getElementById('log');
             const timestamp = new Date().toLocaleTimeString();
-            logEl.innerHTML += '[' + timestamp + '] ' + message + '\n';
+            logEl.innerHTML += '<div><span class="text-cyan-400">[' + timestamp + ']</span> ' + message + '</div>';
             logEl.scrollTop = logEl.scrollHeight;
         }
         

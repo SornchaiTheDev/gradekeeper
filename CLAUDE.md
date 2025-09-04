@@ -74,6 +74,8 @@ build-all.bat                 # Builds Windows executables
 - **Command Types**: `setup`, `open-vscode`, `open-chrome`, `clear`
 - **Web Dashboard**: HTML interface at `http://localhost:8080`
 - **Client Management**: Connection tracking and status monitoring
+- **One-Click Operations**: Setup All (setup + VS Code + Chrome), Clear All with confirmation
+- **Individual Client Control**: Per-client one-click setup and clear operations
 
 ## Development Notes
 
