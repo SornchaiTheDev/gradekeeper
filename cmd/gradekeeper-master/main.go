@@ -7,10 +7,19 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
+)
+
+const (
+	// Heartbeat configuration
+	HeartbeatInterval = 30 * time.Second // How often clients should send heartbeat
+	HeartbeatTimeout  = 90 * time.Second // How long to wait before marking client as disconnected
 )
 
 type Message struct {
@@ -25,24 +34,29 @@ type Command struct {
 }
 
 type ClientInfo struct {
-	ID       string    `json:"id"`
-	Name     string    `json:"name"`
-	Status   string    `json:"status"`
-	LastSeen time.Time `json:"lastSeen"`
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	Status        string    `json:"status"`
+	LastSeen      time.Time `json:"lastSeen"`
+	FirstSeen     time.Time `json:"firstSeen"`
+	LastHeartbeat time.Time `json:"lastHeartbeat"`
 }
 
 type Master struct {
-	clients         map[string]*websocket.Conn
-	dashboardConns  map[*websocket.Conn]bool
-	clientsMu       sync.RWMutex
-	dashboardMu     sync.RWMutex
-	upgrader        websocket.Upgrader
-	dashboardSecret string
+	clients           map[string]*websocket.Conn
+	clientsInfo       map[string]*ClientInfo
+	dashboardConns    map[*websocket.Conn]bool
+	clientsMu         sync.RWMutex
+	dashboardMu       sync.RWMutex
+	upgrader          websocket.Upgrader
+	dashboardSecret   string
+	storageFile       string
 }
 
 func NewMaster() *Master {
-	return &Master{
+	m := &Master{
 		clients:         make(map[string]*websocket.Conn),
+		clientsInfo:     make(map[string]*ClientInfo),
 		dashboardConns:  make(map[*websocket.Conn]bool),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
@@ -50,7 +64,139 @@ func NewMaster() *Master {
 			},
 		},
 		dashboardSecret: generateRandomSecret(),
+		storageFile:     "gradekeeper-clients.json",
 	}
+	
+	// Load existing client data
+	m.loadClientData()
+	
+	// Start heartbeat monitor
+	go m.monitorHeartbeats()
+	
+	return m
+}
+
+func (m *Master) loadClientData() {
+	data, err := os.ReadFile(m.storageFile)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("Error reading client data: %v", err)
+		}
+		return
+	}
+
+	var clients []ClientInfo
+	if err := json.Unmarshal(data, &clients); err != nil {
+		log.Printf("Error parsing client data: %v", err)
+		return
+	}
+
+	for _, client := range clients {
+		clientInfo := client
+		clientInfo.Status = "disconnected" // All clients start as disconnected
+		m.clientsInfo[client.ID] = &clientInfo
+	}
+
+	log.Printf("Loaded %d client records from storage", len(clients))
+}
+
+func (m *Master) saveClientData() {
+	m.clientsMu.RLock()
+	clients := make([]ClientInfo, 0, len(m.clientsInfo))
+	for _, client := range m.clientsInfo {
+		clients = append(clients, *client)
+	}
+	m.clientsMu.RUnlock()
+
+	data, err := json.MarshalIndent(clients, "", "  ")
+	if err != nil {
+		log.Printf("Error marshaling client data: %v", err)
+		return
+	}
+
+	if err := os.WriteFile(m.storageFile, data, 0644); err != nil {
+		log.Printf("Error saving client data: %v", err)
+		return
+	}
+}
+
+func (m *Master) monitorHeartbeats() {
+	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds
+	defer ticker.Stop()
+
+	for range ticker.C {
+		now := time.Now()
+		m.clientsMu.Lock()
+		
+		var disconnectedClients []string
+		for clientID, clientInfo := range m.clientsInfo {
+			// Check if client is supposed to be connected but hasn't sent heartbeat recently
+			if clientInfo.Status == "connected" {
+				if now.Sub(clientInfo.LastHeartbeat) > HeartbeatTimeout {
+					// Client missed heartbeat deadline
+					clientInfo.Status = "disconnected"
+					clientInfo.LastSeen = now
+					disconnectedClients = append(disconnectedClients, clientID)
+					
+					// Also remove from active connections if present
+					if conn, exists := m.clients[clientID]; exists {
+						conn.Close()
+						delete(m.clients, clientID)
+					}
+				}
+			}
+		}
+		
+		m.clientsMu.Unlock()
+		
+		// Log and notify dashboard of disconnected clients
+		for _, clientID := range disconnectedClients {
+			log.Printf("Client %s marked as disconnected due to heartbeat timeout", clientID)
+			
+			// Notify dashboards
+			m.broadcastToDashboard(Message{
+				Type: "client-disconnected",
+				Data: map[string]interface{}{
+					"clientId":     clientID,
+					"reason":       "heartbeat_timeout",
+					"totalClients": len(m.clients),
+				},
+				Timestamp: now,
+			})
+		}
+		
+		if len(disconnectedClients) > 0 {
+			m.saveClientData()
+		}
+	}
+}
+
+func (m *Master) cleanup() {
+	log.Println("Cleaning up...")
+	
+	// Clear the clients storage file
+	if err := os.Remove(m.storageFile); err != nil && !os.IsNotExist(err) {
+		log.Printf("Warning: Could not remove client storage file: %v", err)
+	} else if err == nil {
+		log.Println("Client storage file cleared successfully")
+	}
+	
+	// Close all client connections
+	m.clientsMu.Lock()
+	for clientID, conn := range m.clients {
+		conn.Close()
+		log.Printf("Closed connection to client: %s", clientID)
+	}
+	m.clientsMu.Unlock()
+	
+	// Close all dashboard connections
+	m.dashboardMu.Lock()
+	for conn := range m.dashboardConns {
+		conn.Close()
+	}
+	m.dashboardMu.Unlock()
+	
+	log.Println("Cleanup completed")
 }
 
 func (m *Master) handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -65,8 +211,9 @@ func (m *Master) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Check for dashboard authentication via query parameter
 	dashboardAuth := r.URL.Query().Get("dashboard")
 
-	// Check if this is a dashboard connection
-	if dashboardAuth == m.dashboardSecret {
+	// Check if this is a dashboard connection attempt
+	if dashboardAuth != "" {
+		if dashboardAuth == m.dashboardSecret {
 		// This is a dashboard connection
 		m.dashboardMu.Lock()
 		m.dashboardConns[conn] = true
@@ -98,18 +245,46 @@ func (m *Master) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		delete(m.dashboardConns, conn)
 		m.dashboardMu.Unlock()
 		return
+		} else {
+			// Invalid dashboard authentication
+			log.Printf("Dashboard connection with invalid authentication: %s", dashboardAuth)
+			conn.Close()
+			return
+		}
 	}
 
 	// This should be a client connection - require X-Client-ID
 	if clientID == "" {
-		log.Printf("Client attempted to connect without providing X-Client-ID header")
+		log.Printf("WebSocket connection rejected: no X-Client-ID header and no dashboard authentication")
 		conn.Close()
 		return
 	}
 
 	m.clientsMu.Lock()
 	m.clients[clientID] = conn
+	
+	// Update or create client info
+	now := time.Now()
+	if clientInfo, exists := m.clientsInfo[clientID]; exists {
+		// Existing client reconnected
+		clientInfo.Status = "connected"
+		clientInfo.LastSeen = now
+		clientInfo.LastHeartbeat = now
+	} else {
+		// New client
+		m.clientsInfo[clientID] = &ClientInfo{
+			ID:            clientID,
+			Name:          fmt.Sprintf("Client-%s", clientID[:8]),
+			Status:        "connected",
+			LastSeen:      now,
+			FirstSeen:     now,
+			LastHeartbeat: now,
+		}
+	}
 	m.clientsMu.Unlock()
+	
+	// Save updated client data
+	m.saveClientData()
 
 	log.Printf("Client %s connected", clientID)
 
@@ -143,11 +318,18 @@ func (m *Master) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		m.handleClientMessage(clientID, msg)
 	}
 
-	// Remove client on disconnect
+	// Mark client as disconnected
 	m.clientsMu.Lock()
 	delete(m.clients, clientID)
+	if clientInfo, exists := m.clientsInfo[clientID]; exists {
+		clientInfo.Status = "disconnected"
+		clientInfo.LastSeen = time.Now()
+	}
 	clientCount := len(m.clients)
 	m.clientsMu.Unlock()
+	
+	// Save updated client data
+	m.saveClientData()
 
 	// Notify dashboards about client disconnect
 	m.broadcastToDashboard(Message{
@@ -170,6 +352,19 @@ func (m *Master) handleClientMessage(clientID string, msg Message) {
 	case "result":
 		// Client sending command execution result
 		log.Printf("Client %s result: %v", clientID, msg.Data)
+	case "heartbeat":
+		// Client sending heartbeat - update last heartbeat time
+		m.clientsMu.Lock()
+		if clientInfo, exists := m.clientsInfo[clientID]; exists {
+			clientInfo.LastHeartbeat = time.Now()
+			clientInfo.LastSeen = time.Now()
+			if clientInfo.Status != "connected" {
+				clientInfo.Status = "connected"
+				log.Printf("Client %s marked as connected via heartbeat", clientID)
+			}
+		}
+		m.clientsMu.Unlock()
+		m.saveClientData()
 	}
 }
 
@@ -224,18 +419,13 @@ func (m *Master) broadcastToDashboard(msg Message) {
 	}
 }
 
-func (m *Master) getConnectedClients() []ClientInfo {
+func (m *Master) getAllClients() []ClientInfo {
 	m.clientsMu.RLock()
 	defer m.clientsMu.RUnlock()
 
-	clients := make([]ClientInfo, 0, len(m.clients))
-	for clientID := range m.clients {
-		clients = append(clients, ClientInfo{
-			ID:       clientID,
-			Name:     fmt.Sprintf("Client-%s", clientID[:8]),
-			Status:   "connected",
-			LastSeen: time.Now(),
-		})
+	clients := make([]ClientInfo, 0, len(m.clientsInfo))
+	for _, clientInfo := range m.clientsInfo {
+		clients = append(clients, *clientInfo)
 	}
 	return clients
 }
@@ -388,34 +578,42 @@ func (m *Master) handleDashboard(w http.ResponseWriter, r *http.Request) {
                 .then(response => response.json())
                 .then(clients => {
                     const container = document.getElementById('clients');
-                    container.innerHTML = clients.map(client => 
-                        '<div class="bg-gray-50 border border-gray-200 rounded-lg p-4 border-l-4 border-l-success">' +
+                    container.innerHTML = clients.map(client => {
+                        const isConnected = client.status === 'connected';
+                        const statusColor = isConnected ? 'border-l-success' : 'border-l-gray-400';
+                        const statusBadgeColor = isConnected ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600';
+                        const lastSeenTime = new Date(client.lastSeen).toLocaleString();
+                        const firstSeenTime = new Date(client.firstSeen).toLocaleString();
+                        
+                        return '<div class="bg-gray-50 border border-gray-200 rounded-lg p-4 border-l-4 ' + statusColor + '">' +
                         '<div class="flex items-center gap-2 mb-2">' +
                         '<i data-lucide="monitor" class="w-4 h-4 text-gray-600"></i>' +
                         '<h3 class="font-semibold text-gray-800">' + client.name + '</h3>' +
                         '</div>' +
                         '<p class="text-sm text-gray-600 mb-1">ID: <code class="bg-gray-200 px-1 rounded text-xs">' + client.id + '</code></p>' +
-                        '<p class="text-sm text-gray-600 mb-4">Status: <span class="inline-flex items-center px-2 py-1 rounded-full text-xs bg-green-100 text-green-800">' + client.status + '</span></p>' +
+                        '<p class="text-sm text-gray-600 mb-1">Status: <span class="inline-flex items-center px-2 py-1 rounded-full text-xs ' + statusBadgeColor + '">' + client.status + '</span></p>' +
+                        '<p class="text-sm text-gray-600 mb-1">Last Seen: <span class="text-xs">' + lastSeenTime + '</span></p>' +
+                        (client.firstSeen ? '<p class="text-sm text-gray-600 mb-4">First Seen: <span class="text-xs">' + firstSeenTime + '</span></p>' : '<div class="mb-4"></div>') +
                         '<div class="space-y-3">' +
                         '<div class="flex gap-2">' +
-                        '<button onclick="setupAllForClient(\'' + client.id + '\')" class="bg-success hover:bg-green-700 text-white text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 flex-1">' +
+                        '<button onclick="setupAllForClient(\'' + client.id + '\')" ' + (isConnected ? '' : 'disabled ') + 'class="' + (isConnected ? 'bg-success hover:bg-green-700 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed') + ' text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 flex-1">' +
                         '<i data-lucide="rocket" class="w-4 h-4"></i>Setup All</button>' +
-                        '<button onclick="clearAllForClient(\'' + client.id + '\')" class="bg-danger hover:bg-red-700 text-white text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 flex-1">' +
+                        '<button onclick="clearAllForClient(\'' + client.id + '\')" ' + (isConnected ? '' : 'disabled ') + 'class="' + (isConnected ? 'bg-danger hover:bg-red-700 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed') + ' text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 flex-1">' +
                         '<i data-lucide="trash-2" class="w-4 h-4"></i>Clear All</button>' +
                         '</div>' +
                         '<div class="grid grid-cols-2 gap-2">' +
-                        '<button onclick="sendCommandToClient(\'' + client.id + '\', \'setup\')" class="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 justify-center">' +
+                        '<button onclick="sendCommandToClient(\'' + client.id + '\', \'setup\')" ' + (isConnected ? '' : 'disabled ') + 'class="' + (isConnected ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed') + ' text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 justify-center">' +
                         '<i data-lucide="folder-plus" class="w-4 h-4"></i>Setup</button>' +
-                        '<button onclick="sendCommandToClient(\'' + client.id + '\', \'open-vscode\')" class="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 justify-center">' +
+                        '<button onclick="sendCommandToClient(\'' + client.id + '\', \'open-vscode\')" ' + (isConnected ? '' : 'disabled ') + 'class="' + (isConnected ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed') + ' text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 justify-center">' +
                         '<i data-lucide="code" class="w-4 h-4"></i>VS Code</button>' +
-                        '<button onclick="sendCommandToClient(\'' + client.id + '\', \'open-chrome\')" class="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 justify-center">' +
+                        '<button onclick="sendCommandToClient(\'' + client.id + '\', \'open-chrome\')" ' + (isConnected ? '' : 'disabled ') + 'class="' + (isConnected ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed') + ' text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 justify-center">' +
                         '<i data-lucide="globe" class="w-4 h-4"></i>Chrome</button>' +
-                        '<button onclick="sendCommandToClient(\'' + client.id + '\', \'clear\')" class="bg-gray-600 hover:bg-gray-700 text-white text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 justify-center">' +
+                        '<button onclick="sendCommandToClient(\'' + client.id + '\', \'clear\')" ' + (isConnected ? '' : 'disabled ') + 'class="' + (isConnected ? 'bg-gray-600 hover:bg-gray-700 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed') + ' text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 justify-center">' +
                         '<i data-lucide="x" class="w-4 h-4"></i>Clear</button>' +
                         '</div>' +
                         '</div>' +
-                        '</div>'
-                    ).join('');
+                        '</div>';
+                    }).join('');
                     // Re-initialize Lucide icons for dynamically added content
                     lucide.createIcons();
                 });
@@ -524,13 +722,17 @@ func (m *Master) handleAPICommand(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Master) handleAPIClients(w http.ResponseWriter, r *http.Request) {
-	clients := m.getConnectedClients()
+	clients := m.getAllClients()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(clients)
 }
 
 func main() {
 	master := NewMaster()
+
+	// Setup signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	http.HandleFunc("/", master.handleDashboard)
 	http.HandleFunc("/ws", master.handleWebSocket)
@@ -542,5 +744,20 @@ func main() {
 	fmt.Println("🔌 WebSocket: ws://localhost:8080/ws")
 	fmt.Printf("🔐 Dashboard Secret: %s\n", master.dashboardSecret)
 
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	// Start the server in a goroutine
+	server := &http.Server{Addr: ":8080"}
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server failed to start: %v", err)
+		}
+	}()
+
+	// Wait for shutdown signal
+	<-sigChan
+	fmt.Println("\n🛑 Shutdown signal received...")
+	
+	// Perform cleanup
+	master.cleanup()
+	
+	fmt.Println("👋 GradeKeeper Master Server stopped gracefully")
 }

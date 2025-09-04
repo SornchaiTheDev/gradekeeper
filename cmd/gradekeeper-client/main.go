@@ -16,6 +16,11 @@ import (
 	"gradekeeper/internal/platform"
 )
 
+const (
+	// Heartbeat configuration - should match server settings
+	HeartbeatInterval = 30 * time.Second
+)
+
 type Message struct {
 	Type      string      `json:"type"`
 	Data      interface{} `json:"data"`
@@ -108,6 +113,9 @@ func (c *Client) connectWithRetry() {
 
 		// Start listening for messages
 		go c.listen()
+		
+		// Start heartbeat
+		go c.startHeartbeat()
 		break
 	}
 }
@@ -339,6 +347,37 @@ func (c *Client) sendStatus(status string) {
 	}
 }
 
+func (c *Client) startHeartbeat() {
+	ticker := time.NewTicker(HeartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			// Send heartbeat message
+			if c.conn != nil {
+				msg := Message{
+					Type: "heartbeat",
+					Data: map[string]interface{}{
+						"clientId": c.clientID,
+						"timestamp": time.Now(),
+					},
+					Timestamp: time.Now(),
+				}
+
+				if err := c.conn.WriteJSON(msg); err != nil {
+					log.Printf("Error sending heartbeat: %v", err)
+					return
+				}
+			}
+		case <-c.shutdown:
+			return
+		case <-c.done:
+			return
+		}
+	}
+}
+
 func (c *Client) close() {
 	if c.conn != nil {
 		c.conn.Close()
@@ -350,7 +389,7 @@ func generateClientID() string {
 	if hostname == "" {
 		hostname = "unknown"
 	}
-	return fmt.Sprintf("%s-%s-%d", runtime.GOOS, hostname, time.Now().Unix())
+	return fmt.Sprintf("%s-%s", runtime.GOOS, hostname)
 }
 
 func errorToString(err error) string {
