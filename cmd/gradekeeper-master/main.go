@@ -261,6 +261,26 @@ func (m *Master) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	m.clientsMu.Lock()
+	
+	// Check if client is already connected
+	if _, exists := m.clients[clientID]; exists {
+		log.Printf("Client %s attempted to connect but is already connected, rejecting new connection", clientID)
+		m.clientsMu.Unlock()
+		
+		// Send rejection message before closing
+		rejectMsg := Message{
+			Type: "error",
+			Data: map[string]interface{}{
+				"error": "duplicate_connection",
+				"message": "A connection with this client ID already exists",
+			},
+			Timestamp: time.Now(),
+		}
+		conn.WriteJSON(rejectMsg)
+		conn.Close()
+		return
+	}
+	
 	m.clients[clientID] = conn
 	
 	// Update or create client info

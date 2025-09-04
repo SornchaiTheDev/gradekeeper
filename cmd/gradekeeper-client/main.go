@@ -33,13 +33,14 @@ type Command struct {
 }
 
 type Client struct {
-	conn      *websocket.Conn
-	serverURL string
-	clientID  string
-	done      chan struct{}
-	reconnect chan struct{}
-	shutdown  chan struct{}
-	retrying  bool
+	conn          *websocket.Conn
+	serverURL     string
+	clientID      string
+	done          chan struct{}
+	reconnect     chan struct{}
+	shutdown      chan struct{}
+	retrying      bool
+	shouldNotReconnect bool
 }
 
 func NewClient(serverURL string) *Client {
@@ -142,7 +143,7 @@ func (c *Client) listen() {
 				log.Println("Shutdown in progress, not triggering reconnect...")
 				return
 			default:
-				if !c.retrying {
+				if !c.retrying && !c.shouldNotReconnect {
 					select {
 					case c.reconnect <- struct{}{}:
 						// Successfully sent reconnect signal
@@ -165,6 +166,8 @@ func (c *Client) handleMessage(msg Message) {
 	switch msg.Type {
 	case "welcome":
 		fmt.Println("Welcome message received from master")
+	case "error":
+		c.handleError(msg)
 	case "command":
 		if cmdData, ok := msg.Data.(map[string]interface{}); ok {
 			action := cmdData["action"].(string)
@@ -178,6 +181,28 @@ func (c *Client) handleMessage(msg Message) {
 				c.executeCommand(action)
 			}
 		}
+	}
+}
+
+func (c *Client) handleError(msg Message) {
+	if errorData, ok := msg.Data.(map[string]interface{}); ok {
+		errorType := errorData["error"].(string)
+		errorMessage := errorData["message"].(string)
+		
+		log.Printf("Received error from master: %s - %s", errorType, errorMessage)
+		
+		if errorType == "duplicate_connection" {
+			fmt.Printf("Error: %s\n", errorMessage)
+			fmt.Println("Another instance of this client is already connected to the master server.")
+			fmt.Println("Please stop the other instance before running this client.")
+			
+			// Set flag to prevent reconnection and exit
+			c.shouldNotReconnect = true
+			os.Exit(1)
+		}
+		
+		// Handle other error types here in the future
+		log.Printf("Unhandled error type: %s", errorType)
 	}
 }
 
@@ -305,7 +330,7 @@ func (c *Client) sendResult(result map[string]interface{}) {
 
 	if err := c.conn.WriteJSON(msg); err != nil {
 		log.Printf("Error sending result: %v", err)
-		if !c.retrying {
+		if !c.retrying && !c.shouldNotReconnect {
 			select {
 			case c.reconnect <- struct{}{}:
 				// Successfully sent reconnect signal
@@ -335,7 +360,7 @@ func (c *Client) sendStatus(status string) {
 
 	if err := c.conn.WriteJSON(msg); err != nil {
 		log.Printf("Error sending status: %v", err)
-		if !c.retrying {
+		if !c.retrying && !c.shouldNotReconnect {
 			select {
 			case c.reconnect <- struct{}{}:
 				// Successfully sent reconnect signal
