@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"gradekeeper/internal/config"
 	"gradekeeper/internal/platform"
 )
 
@@ -259,13 +260,8 @@ func (c *Client) openVSCodeAction() error {
 
 func (c *Client) openChromeAction() error {
 	fmt.Println("Opening browser with multiple tabs...")
-	urls := []string{
-		"https://google.com",
-		"https://github.com",
-		"https://stackoverflow.com",
-	}
-
-	err := platform.OpenBrowserWithTabs(urls)
+	
+	err := platform.OpenBrowserWithTabs(config.DefaultURLs)
 	if err != nil {
 		return fmt.Errorf("error opening browser: %v", err)
 	}
@@ -467,11 +463,7 @@ func runStandalone() {
 
 		// Open browser with multiple tabs
 		fmt.Println("Opening browser with multiple tabs...")
-		urls := []string{
-			"http://158.108.30.225:5678/form/07e92300-17f4-4265-be50-c42dae953ffb",
-			"http://http://158.108.16.32",
-		}
-		err = platform.OpenBrowserWithTabs(urls)
+		err = platform.OpenBrowserWithTabs(config.DefaultURLs)
 		if err != nil {
 			fmt.Printf("Error opening browser: %v\n", err)
 		} else {

@@ -56,6 +56,7 @@ build-all.bat                 # Builds Windows executables
 2. **`cmd/gradekeeper-client/main.go`** - Cross-platform WebSocket client with standalone fallback
 3. **`cmd/gradekeeper-master/main.go`** - Master server with web dashboard
 4. **`internal/platform/platform.go`** - Shared cross-platform functionality
+5. **`internal/config/config.go`** - Centralized configuration for default URLs
 
 ### Key Functions:
 - `getDesktopPath()` - Cross-platform desktop detection (Windows: USERPROFILE, Linux: XDG/~, macOS: ~)
@@ -86,3 +87,19 @@ build-all.bat                 # Builds Windows executables
 - **Graceful Fallbacks**: Multiple fallback strategies for all external programs
 - **Incognito Mode**: All browser launches use incognito/private browsing mode
 - **Environment Cleanup**: Clear command removes folders and closes applications
+- **Centralized Configuration**: Default URLs managed in `internal/config/config.go`
+
+## Customization
+
+To modify the URLs that open in the browser, edit the `DefaultURLs` slice in `internal/config/config.go`:
+
+```go
+// DefaultURLs contains the default URLs to open in the browser
+var DefaultURLs = []string{
+    "http://your-custom-url-1.com",
+    "http://your-custom-url-2.com",
+    // Add your custom URLs here
+}
+```
+
+This configuration is shared between all components (standalone, client, and master-controlled operations).

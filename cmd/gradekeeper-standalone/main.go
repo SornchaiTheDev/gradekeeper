@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"gradekeeper/internal/config"
 	"gradekeeper/internal/platform"
 )
 
@@ -52,12 +53,7 @@ func main() {
 
 		// Open browser with multiple tabs
 		fmt.Println("Opening browser with multiple tabs...")
-		urls := []string{
-			"https://google.com",
-			"https://github.com",
-			"https://stackoverflow.com",
-		}
-		err = platform.OpenBrowserWithTabs(urls)
+		err = platform.OpenBrowserWithTabs(config.DefaultURLs)
 		if err != nil {
 			fmt.Printf("Error opening browser: %v\n", err)
 		} else {
