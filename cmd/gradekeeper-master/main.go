@@ -41,6 +41,9 @@ type ClientInfo struct {
 	LastSeen      time.Time `json:"lastSeen"`
 	FirstSeen     time.Time `json:"firstSeen"`
 	LastHeartbeat time.Time `json:"lastHeartbeat"`
+	Action        string    `json:"action"`        // Current/last action: "setup", "setupAll", "clear", etc.
+	ActionStatus  string    `json:"actionStatus"` // "running", "success", "failed"
+	ActionError   string    `json:"actionError"`  // Error message if failed
 }
 
 type Master struct {
@@ -373,6 +376,9 @@ func (m *Master) handleClientMessage(clientID string, msg Message) {
 	case "result":
 		// Client sending command execution result
 		log.Printf("Client %s result: %v", clientID, msg.Data)
+	case "action_status":
+		// Client sending action status update
+		m.handleActionStatus(clientID, msg.Data)
 	case "heartbeat":
 		// Client sending heartbeat - update last heartbeat time
 		m.clientsMu.Lock()
@@ -387,6 +393,44 @@ func (m *Master) handleClientMessage(clientID string, msg Message) {
 		m.clientsMu.Unlock()
 		m.saveClientData()
 	}
+}
+
+func (m *Master) handleActionStatus(clientID string, data interface{}) {
+	dataMap, ok := data.(map[string]interface{})
+	if !ok {
+		log.Printf("Invalid action status data from client %s", clientID)
+		return
+	}
+
+	action, _ := dataMap["action"].(string)
+	status, _ := dataMap["status"].(string)
+	errorMsg, _ := dataMap["error"].(string)
+
+	log.Printf("Client %s action status: %s -> %s", clientID, action, status)
+
+	m.clientsMu.Lock()
+	if clientInfo, exists := m.clientsInfo[clientID]; exists {
+		clientInfo.Action = action
+		clientInfo.ActionStatus = status
+		clientInfo.ActionError = errorMsg
+		clientInfo.LastSeen = time.Now()
+	}
+	m.clientsMu.Unlock()
+
+	// Save updated client data
+	m.saveClientData()
+
+	// Broadcast to dashboards for real-time updates
+	m.broadcastToDashboard(Message{
+		Type: "client_action_update",
+		Data: map[string]interface{}{
+			"clientId": clientID,
+			"action":   action,
+			"status":   status,
+			"error":    errorMsg,
+		},
+		Timestamp: time.Now(),
+	})
 }
 
 func (m *Master) broadcastCommand(cmd Command) {
@@ -577,6 +621,11 @@ func (m *Master) handleDashboard(w http.ResponseWriter, r *http.Request) {
                     case 'command-sent':
                         log('Command sent: ' + data.data.action + ' to ' + (data.data.target || 'all') + ' (' + data.data.clientCount + ' clients)');
                         break;
+                    case 'client_action_update':
+                        log('Client ' + data.data.clientId + ': ' + data.data.action + ' -> ' + data.data.status + 
+                            (data.data.error ? ' (Error: ' + data.data.error + ')' : ''));
+                        refreshClients(); // Refresh to show updated action status
+                        break;
                     default:
                         log('Received: ' + JSON.stringify(data));
                 }
@@ -607,12 +656,20 @@ func (m *Master) handleDashboard(w http.ResponseWriter, r *http.Request) {
                     const container = document.getElementById('clients');
                     container.innerHTML = clients.map(client => {
                         const isConnected = client.status === 'connected';
-                        const statusColor = isConnected ? 'border-l-success' : 'border-l-gray-400';
+                        const hasFailed = client.actionStatus === 'failed';
+                        
+                        // Card colors - red for failed, green for connected, gray for disconnected
+                        const statusColor = hasFailed ? 'border-l-red-500' : (isConnected ? 'border-l-success' : 'border-l-gray-400');
+                        const cardBg = hasFailed ? 'bg-red-50' : 'bg-gray-50';
+                        
                         const statusBadgeColor = isConnected ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600';
                         const lastSeenTime = new Date(client.lastSeen).toLocaleString();
                         const firstSeenTime = new Date(client.firstSeen).toLocaleString();
                         
-                        return '<div class="bg-gray-50 border border-gray-200 rounded-lg p-4 border-l-4 ' + statusColor + '">' +
+                        // Action status display
+                        const actionDisplay = getActionStatusDisplay(client);
+                        
+                        return '<div class="' + cardBg + ' border border-gray-200 rounded-lg p-4 border-l-4 ' + statusColor + '">' +
                         '<div class="flex items-center gap-2 mb-2">' +
                         '<i data-lucide="monitor" class="w-4 h-4 text-gray-600"></i>' +
                         '<h3 class="font-semibold text-gray-800">' + client.name + '</h3>' +
@@ -620,7 +677,8 @@ func (m *Master) handleDashboard(w http.ResponseWriter, r *http.Request) {
                         '<p class="text-sm text-gray-600 mb-1">ID: <code class="bg-gray-200 px-1 rounded text-xs">' + client.id + '</code></p>' +
                         '<p class="text-sm text-gray-600 mb-1">Status: <span class="inline-flex items-center px-2 py-1 rounded-full text-xs ' + statusBadgeColor + '">' + client.status + '</span></p>' +
                         '<p class="text-sm text-gray-600 mb-1">Last Seen: <span class="text-xs">' + lastSeenTime + '</span></p>' +
-                        (client.firstSeen ? '<p class="text-sm text-gray-600 mb-4">First Seen: <span class="text-xs">' + firstSeenTime + '</span></p>' : '<div class="mb-4"></div>') +
+                        (client.firstSeen ? '<p class="text-sm text-gray-600 mb-2">First Seen: <span class="text-xs">' + firstSeenTime + '</span></p>' : '<div class="mb-2"></div>') +
+                        actionDisplay +
                         '<div class="space-y-3">' +
                         '<div class="flex gap-2">' +
                         '<button onclick="setupAllForClient(\'' + client.id + '\')" ' + (isConnected ? '' : 'disabled ') + 'class="' + (isConnected ? 'bg-success hover:bg-green-700 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed') + ' text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 flex-1">' +
@@ -654,6 +712,49 @@ func (m *Master) handleDashboard(w http.ResponseWriter, r *http.Request) {
                 body: JSON.stringify(command)
             });
             log('Sent command: ' + action + ' to client ' + clientId);
+        }
+        
+        function getActionStatusDisplay(client) {
+            if (!client.action || !client.actionStatus) {
+                return '<div class="mb-3"></div>'; // No action, just spacing
+            }
+            
+            let statusIcon, statusColor, statusText, statusBg;
+            
+            switch (client.actionStatus) {
+                case 'running':
+                    statusIcon = '<i data-lucide="loader-2" class="w-3 h-3 animate-spin"></i>';
+                    statusColor = 'text-blue-700';
+                    statusBg = 'bg-blue-100 border-blue-200';
+                    statusText = 'Running';
+                    break;
+                case 'success':
+                    statusIcon = '<i data-lucide="check" class="w-3 h-3"></i>';
+                    statusColor = 'text-green-700';
+                    statusBg = 'bg-green-100 border-green-200';
+                    statusText = 'Success';
+                    break;
+                case 'failed':
+                    statusIcon = '<i data-lucide="alert-triangle" class="w-3 h-3"></i>';
+                    statusColor = 'text-red-700';
+                    statusBg = 'bg-red-100 border-red-200';
+                    statusText = 'Failed';
+                    break;
+                default:
+                    return '<div class="mb-3"></div>';
+            }
+            
+            const errorDisplay = client.actionStatus === 'failed' && client.actionError ?
+                '<p class="text-xs text-red-600 mt-1"><strong>Error:</strong> ' + client.actionError + '</p>' : '';
+                
+            return '<div class="mb-3 p-2 border rounded-md ' + statusBg + '">' +
+                   '<div class="flex items-center gap-2 ' + statusColor + '">' +
+                   statusIcon +
+                   '<span class="text-sm font-medium">Action: ' + client.action + '</span>' +
+                   '<span class="text-xs">(' + statusText + ')</span>' +
+                   '</div>' +
+                   errorDisplay +
+                   '</div>';
         }
         
         function setupAll() {

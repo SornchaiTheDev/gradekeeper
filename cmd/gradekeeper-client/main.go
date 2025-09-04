@@ -272,6 +272,9 @@ func (c *Client) handleError(msg Message) {
 func (c *Client) executeCommand(action string) {
 	logInfo("Executing command: %s", action)
 
+	// Send "started" status
+	c.sendActionStatus(action, "running", "")
+
 	var result map[string]interface{}
 	var err error
 
@@ -319,8 +322,20 @@ func (c *Client) executeCommand(action string) {
 		}
 	}
 
-	// Send result back to master
-	c.sendResult(result)
+	// Send completion status back to master
+	if result["status"] == "error" {
+		c.sendActionStatus(action, "failed", result["error"].(string))
+	} else {
+		errorStr := ""
+		if result["error"] != nil && result["error"].(string) != "" {
+			errorStr = result["error"].(string)
+		}
+		if errorStr != "" {
+			c.sendActionStatus(action, "failed", errorStr)
+		} else {
+			c.sendActionStatus(action, "success", "")
+		}
+	}
 }
 
 func (c *Client) setupEnvironment() error {
@@ -430,6 +445,38 @@ func (c *Client) sendResult(result map[string]interface{}) {
 
 	if err := c.conn.WriteJSON(msg); err != nil {
 		logError("Error sending result: %v", err)
+		if !c.retrying && !c.shouldNotReconnect {
+			select {
+			case c.reconnect <- struct{}{}:
+				// Successfully sent reconnect signal
+			case <-c.shutdown:
+				// Shutdown requested while trying to signal reconnect
+				return
+			}
+		}
+	}
+}
+
+func (c *Client) sendActionStatus(action, status, errorMsg string) {
+	// Check if connection exists
+	if c.conn == nil {
+		logWarning("Cannot send action status: no connection")
+		return
+	}
+
+	msg := Message{
+		Type: "action_status",
+		Data: map[string]interface{}{
+			"clientId": c.clientID,
+			"action":   action,
+			"status":   status,
+			"error":    errorMsg,
+		},
+		Timestamp: time.Now(),
+	}
+
+	if err := c.conn.WriteJSON(msg); err != nil {
+		logError("Error sending action status: %v", err)
 		if !c.retrying && !c.shouldNotReconnect {
 			select {
 			case c.reconnect <- struct{}{}:
