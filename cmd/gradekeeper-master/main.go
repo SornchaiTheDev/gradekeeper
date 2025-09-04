@@ -56,7 +56,9 @@ func (m *Master) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	clientID := r.Header.Get("X-Client-ID")
 	if clientID == "" {
-		clientID = generateClientID()
+		log.Printf("Client attempted to connect without providing X-Client-ID header")
+		conn.Close()
+		return
 	}
 
 	m.clientsMu.Lock()
@@ -290,10 +292,6 @@ func (m *Master) handleAPIClients(w http.ResponseWriter, r *http.Request) {
 	clients := m.getConnectedClients()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(clients)
-}
-
-func generateClientID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
 func main() {
