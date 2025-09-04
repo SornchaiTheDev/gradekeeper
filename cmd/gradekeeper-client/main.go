@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"net/url"
 	"os"
 	"os/signal"
@@ -20,6 +19,69 @@ const (
 	// Heartbeat configuration - should match server settings
 	HeartbeatInterval = 30 * time.Second
 )
+
+// ANSI color codes
+const (
+	ColorReset  = "\033[0m"
+	ColorRed    = "\033[31m"
+	ColorGreen  = "\033[32m"
+	ColorYellow = "\033[33m"
+	ColorBlue   = "\033[34m"
+	ColorPurple = "\033[35m"
+	ColorCyan   = "\033[36m"
+	ColorWhite  = "\033[37m"
+	ColorBold   = "\033[1m"
+	ColorDim    = "\033[2m"
+)
+
+// Beautiful logging functions
+func logInfo(format string, args ...interface{}) {
+	timestamp := time.Now().Format("15:04:05")
+	fmt.Printf("%s[%s]%s %s%s%s %s\n", 
+		ColorDim, timestamp, ColorReset,
+		ColorBlue, "ℹ", ColorReset,
+		fmt.Sprintf(format, args...))
+}
+
+func logSuccess(format string, args ...interface{}) {
+	timestamp := time.Now().Format("15:04:05")
+	fmt.Printf("%s[%s]%s %s%s%s %s\n", 
+		ColorDim, timestamp, ColorReset,
+		ColorGreen, "✓", ColorReset,
+		fmt.Sprintf(format, args...))
+}
+
+func logWarning(format string, args ...interface{}) {
+	timestamp := time.Now().Format("15:04:05")
+	fmt.Printf("%s[%s]%s %s%s%s %s\n", 
+		ColorDim, timestamp, ColorReset,
+		ColorYellow, "⚠", ColorReset,
+		fmt.Sprintf(format, args...))
+}
+
+func logError(format string, args ...interface{}) {
+	timestamp := time.Now().Format("15:04:05")
+	fmt.Printf("%s[%s]%s %s%s%s %s\n", 
+		ColorDim, timestamp, ColorReset,
+		ColorRed, "✗", ColorReset,
+		fmt.Sprintf(format, args...))
+}
+
+func logDebug(format string, args ...interface{}) {
+	timestamp := time.Now().Format("15:04:05")
+	fmt.Printf("%s[%s]%s %s%s%s %s\n", 
+		ColorDim, timestamp, ColorReset,
+		ColorPurple, "🔧", ColorReset,
+		fmt.Sprintf(format, args...))
+}
+
+func logHeartbeat() {
+	timestamp := time.Now().Format("15:04:05")
+	fmt.Printf("%s[%s]%s %s%s%s %sHeartbeat sent%s\n", 
+		ColorDim, timestamp, ColorReset,
+		ColorCyan, "💓", ColorReset,
+		ColorDim, ColorReset)
+}
 
 type Message struct {
 	Type      string      `json:"type"`
@@ -68,7 +130,7 @@ func (c *Client) connect() error {
 	}
 
 	c.conn = conn
-	fmt.Printf("Connected to master server as client: %s\n", c.clientID)
+	logSuccess("Connected to master server as client: %s", c.clientID)
 	return nil
 }
 
@@ -80,7 +142,7 @@ func (c *Client) connectWithRetry() {
 		// Check if shutdown was requested before attempting connection
 		select {
 		case <-c.shutdown:
-			log.Println("Shutdown requested, stopping connection attempts...")
+			logInfo("Shutdown requested, stopping connection attempts...")
 			return
 		default:
 			// Continue with connection attempt
@@ -89,14 +151,14 @@ func (c *Client) connectWithRetry() {
 		c.retrying = true
 		err := c.connect()
 		if err != nil {
-			log.Printf("Connection failed: %v. Retrying in %v...", err, backoff)
+			logWarning("Connection failed: %v. Retrying in %v...", err, backoff)
 
 			// Use select to check for shutdown during sleep
 			select {
 			case <-time.After(backoff):
 				// Continue with retry
 			case <-c.shutdown:
-				log.Println("Shutdown requested during retry, exiting...")
+				logInfo("Shutdown requested during retry, exiting...")
 				return
 			}
 
@@ -126,7 +188,7 @@ func (c *Client) listen() {
 		// Check if shutdown was requested
 		select {
 		case <-c.shutdown:
-			log.Println("Shutdown requested, stopping message listener...")
+			logInfo("Shutdown requested, stopping message listener...")
 			return
 		default:
 			// Continue with message reading
@@ -135,12 +197,12 @@ func (c *Client) listen() {
 		var msg Message
 		err := c.conn.ReadJSON(&msg)
 		if err != nil {
-			log.Printf("WebSocket read error: %v", err)
+			logError("WebSocket connection lost: %v", err)
 			
 			// Check if we're shutting down before attempting reconnect
 			select {
 			case <-c.shutdown:
-				log.Println("Shutdown in progress, not triggering reconnect...")
+				logInfo("Shutdown in progress, not triggering reconnect...")
 				return
 			default:
 				if !c.retrying && !c.shouldNotReconnect {
@@ -161,11 +223,11 @@ func (c *Client) listen() {
 }
 
 func (c *Client) handleMessage(msg Message) {
-	log.Printf("Received message: %+v", msg)
+	logDebug("Received message: %s", msg.Type)
 
 	switch msg.Type {
 	case "welcome":
-		fmt.Println("Welcome message received from master")
+		logSuccess("Welcome message received from master")
 	case "error":
 		c.handleError(msg)
 	case "command":
@@ -189,12 +251,13 @@ func (c *Client) handleError(msg Message) {
 		errorType := errorData["error"].(string)
 		errorMessage := errorData["message"].(string)
 		
-		log.Printf("Received error from master: %s - %s", errorType, errorMessage)
+		logError("Error from master: %s - %s", errorType, errorMessage)
 		
 		if errorType == "duplicate_connection" {
-			fmt.Printf("Error: %s\n", errorMessage)
-			fmt.Println("Another instance of this client is already connected to the master server.")
-			fmt.Println("Please stop the other instance before running this client.")
+			fmt.Printf("\n%s%s━━━ DUPLICATE CONNECTION ERROR ━━━%s\n", ColorRed, ColorBold, ColorReset)
+			fmt.Printf("%s%s%s %s\n", ColorRed, "✗", ColorReset, errorMessage)
+			fmt.Printf("%s%s%s Another instance of this client is already connected to the master server.\n", ColorYellow, "⚠", ColorReset)
+			fmt.Printf("%s%s%s Please stop the other instance before running this client.\n", ColorBlue, "ℹ", ColorReset)
 			
 			// Set flag to prevent reconnection and exit
 			c.shouldNotReconnect = true
@@ -202,12 +265,12 @@ func (c *Client) handleError(msg Message) {
 		}
 		
 		// Handle other error types here in the future
-		log.Printf("Unhandled error type: %s", errorType)
+		logWarning("Unhandled error type: %s", errorType)
 	}
 }
 
 func (c *Client) executeCommand(action string) {
-	fmt.Printf("Executing command: %s\n", action)
+	logInfo("Executing command: %s", action)
 
 	var result map[string]interface{}
 	var err error
@@ -262,14 +325,14 @@ func (c *Client) setupEnvironment() error {
 
 	// Create DOMJudge folder
 	domjudgePath := filepath.Join(desktopPath, "DOMJudge")
-	fmt.Printf("Creating folder: %s\n", domjudgePath)
+	logInfo("Creating folder: %s", domjudgePath)
 
 	err = os.MkdirAll(domjudgePath, os.ModePerm)
 	if err != nil {
 		return fmt.Errorf("error creating folder: %v", err)
 	}
 
-	fmt.Println("DOMJudge folder created successfully!")
+	logSuccess("DOMJudge folder created successfully!")
 	return nil
 }
 
@@ -280,45 +343,45 @@ func (c *Client) openVSCodeAction() error {
 	}
 
 	domjudgePath := filepath.Join(desktopPath, "DOMJudge")
-	fmt.Println("Opening VS Code...")
+	logInfo("Opening VS Code...")
 
 	err = platform.OpenVSCode(domjudgePath)
 	if err != nil {
 		return fmt.Errorf("error opening VS Code: %v", err)
 	}
 
-	fmt.Println("VS Code opened successfully!")
+	logSuccess("VS Code opened successfully!")
 	return nil
 }
 
 func (c *Client) openChromeAction() error {
-	fmt.Println("Opening browser with multiple tabs...")
+	logInfo("Opening browser with multiple tabs...")
 	
 	err := platform.OpenBrowserWithTabs(config.DefaultURLs)
 	if err != nil {
 		return fmt.Errorf("error opening browser: %v", err)
 	}
 
-	fmt.Println("Browser opened successfully with multiple tabs in incognito mode!")
+	logSuccess("Browser opened successfully with multiple tabs in incognito mode!")
 	return nil
 }
 
 func (c *Client) clearEnvironmentAction() error {
-	fmt.Println("Clearing environment...")
+	logInfo("Clearing environment...")
 
 	err := platform.ClearEnvironment()
 	if err != nil {
 		return fmt.Errorf("error clearing environment: %v", err)
 	}
 
-	fmt.Println("Environment cleared successfully!")
+	logSuccess("Environment cleared successfully!")
 	return nil
 }
 
 func (c *Client) sendResult(result map[string]interface{}) {
 	// Check if connection exists
 	if c.conn == nil {
-		log.Printf("Cannot send result: no connection")
+		logWarning("Cannot send result: no connection")
 		return
 	}
 
@@ -329,7 +392,7 @@ func (c *Client) sendResult(result map[string]interface{}) {
 	}
 
 	if err := c.conn.WriteJSON(msg); err != nil {
-		log.Printf("Error sending result: %v", err)
+		logError("Error sending result: %v", err)
 		if !c.retrying && !c.shouldNotReconnect {
 			select {
 			case c.reconnect <- struct{}{}:
@@ -345,7 +408,7 @@ func (c *Client) sendResult(result map[string]interface{}) {
 func (c *Client) sendStatus(status string) {
 	// Check if connection exists
 	if c.conn == nil {
-		log.Printf("Cannot send status '%s': no connection", status)
+		logWarning("Cannot send status '%s': no connection", status)
 		return
 	}
 
@@ -359,7 +422,7 @@ func (c *Client) sendStatus(status string) {
 	}
 
 	if err := c.conn.WriteJSON(msg); err != nil {
-		log.Printf("Error sending status: %v", err)
+		logError("Error sending status: %v", err)
 		if !c.retrying && !c.shouldNotReconnect {
 			select {
 			case c.reconnect <- struct{}{}:
@@ -391,7 +454,7 @@ func (c *Client) startHeartbeat() {
 				}
 
 				if err := c.conn.WriteJSON(msg); err != nil {
-					log.Printf("Error sending heartbeat: %v", err)
+					logError("Error sending heartbeat: %v", err)
 					return
 				}
 			}
@@ -456,10 +519,10 @@ func main() {
 	for {
 		select {
 		case <-client.reconnect:
-			log.Println("Connection lost, attempting to reconnect...")
+			logWarning("Connection lost, attempting to reconnect...")
 			go client.connectWithRetry()
 		case <-interrupt:
-			log.Println("Interrupt received, closing connection...")
+			logInfo("Interrupt received, closing connection...")
 			client.retrying = true
 			
 			// Signal all goroutines to shutdown
@@ -477,11 +540,11 @@ func main() {
 				// Status sent successfully
 			case <-time.After(2 * time.Second):
 				// Timeout, proceed with shutdown
-				log.Println("Timeout sending disconnect status, forcing shutdown...")
+				logWarning("Timeout sending disconnect status, forcing shutdown...")
 			}
 
 			client.close()
-			log.Println("Client shutdown complete.")
+			logSuccess("Client shutdown complete.")
 			return
 		}
 	}
@@ -499,42 +562,42 @@ func runStandalone() {
 		// Cross-platform standalone functionality
 		desktopPath, err := platform.GetDesktopPath()
 		if err != nil {
-			fmt.Printf("Error getting desktop path: %v\n", err)
+			logError("Error getting desktop path: %v", err)
 			done <- false
 			return
 		}
 
 		// Create DOMJudge folder
 		domjudgePath := filepath.Join(desktopPath, "DOMJudge")
-		fmt.Printf("Creating folder: %s\n", domjudgePath)
+		logInfo("Creating folder: %s", domjudgePath)
 
 		err = os.MkdirAll(domjudgePath, os.ModePerm)
 		if err != nil {
-			fmt.Printf("Error creating folder: %v\n", err)
+			logError("Error creating folder: %v", err)
 			done <- false
 			return
 		}
-		fmt.Println("DOMJudge folder created successfully!")
+		logSuccess("DOMJudge folder created successfully!")
 
 		// Open VS Code with the folder
-		fmt.Println("Opening VS Code...")
+		logInfo("Opening VS Code...")
 		err = platform.OpenVSCode(domjudgePath)
 		if err != nil {
-			fmt.Printf("Error opening VS Code: %v\n", err)
+			logError("Error opening VS Code: %v", err)
 		} else {
-			fmt.Println("VS Code opened successfully!")
+			logSuccess("VS Code opened successfully!")
 		}
 
 		// Open browser with multiple tabs
-		fmt.Println("Opening browser with multiple tabs...")
+		logInfo("Opening browser with multiple tabs...")
 		err = platform.OpenBrowserWithTabs(config.DefaultURLs)
 		if err != nil {
-			fmt.Printf("Error opening browser: %v\n", err)
+			logError("Error opening browser: %v", err)
 		} else {
-			fmt.Printf("Browser opened successfully with multiple tabs in incognito mode on %s!\n", runtime.GOOS)
+			logSuccess("Browser opened successfully with multiple tabs in incognito mode on %s!", runtime.GOOS)
 		}
 
-		fmt.Println("All tasks completed!")
+		logSuccess("All tasks completed!")
 		done <- true
 	}()
 
@@ -545,7 +608,7 @@ func runStandalone() {
 			os.Exit(1)
 		}
 	case <-interrupt:
-		fmt.Println("\nInterrupt received, exiting standalone mode...")
+		logInfo("\nInterrupt received, exiting standalone mode...")
 		os.Exit(0)
 	}
 }
