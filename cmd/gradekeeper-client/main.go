@@ -1,13 +1,16 @@
 package main
 
 import (
+	"encoding/base64"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -243,6 +246,8 @@ func (c *Client) handleMessage(msg Message) {
 				c.executeCommand(action)
 			}
 		}
+	case "file_command":
+		c.handleFileCommand(msg)
 	}
 }
 
@@ -266,6 +271,121 @@ func (c *Client) handleError(msg Message) {
 		
 		// Handle other error types here in the future
 		logWarning("Unhandled error type: %s", errorType)
+	}
+}
+
+func (c *Client) handleFileCommand(msg Message) {
+	if cmdData, ok := msg.Data.(map[string]interface{}); ok {
+		action := cmdData["action"].(string)
+		
+		switch action {
+		case "list":
+			c.handleFileList()
+		case "get":
+			if filePath, ok := cmdData["filePath"].(string); ok {
+				c.handleFileGet(filePath)
+			}
+		}
+	}
+}
+
+func (c *Client) handleFileList() {
+	logInfo("Listing files in DOMJudge directory")
+	
+	desktopPath, err := platform.GetDesktopPath()
+	if err != nil {
+		c.sendFileResponse("list", "", nil, err.Error())
+		return
+	}
+	
+	domjudgePath := filepath.Join(desktopPath, "DOMJudge")
+	
+	// Check if DOMJudge directory exists
+	if _, err := os.Stat(domjudgePath); os.IsNotExist(err) {
+		c.sendFileResponse("list", "", []string{}, "DOMJudge directory not found")
+		return
+	}
+	
+	// Read directory contents
+	files, err := ioutil.ReadDir(domjudgePath)
+	if err != nil {
+		c.sendFileResponse("list", "", nil, err.Error())
+		return
+	}
+	
+	// Filter for code files (C++, Python, etc.)
+	var fileList []map[string]interface{}
+	for _, file := range files {
+		if !file.IsDir() {
+			ext := strings.ToLower(filepath.Ext(file.Name()))
+			if ext == ".cpp" || ext == ".py" || ext == ".c" || ext == ".cc" || ext == ".cxx" || ext == ".hpp" || ext == ".h" {
+				fileList = append(fileList, map[string]interface{}{
+					"name": file.Name(),
+					"size": file.Size(),
+					"modified": file.ModTime(),
+					"ext": ext,
+				})
+			}
+		}
+	}
+	
+	c.sendFileResponse("list", "", fileList, "")
+}
+
+func (c *Client) handleFileGet(filePath string) {
+	logInfo("Reading file: %s", filePath)
+	
+	desktopPath, err := platform.GetDesktopPath()
+	if err != nil {
+		c.sendFileResponse("get", filePath, nil, err.Error())
+		return
+	}
+	
+	fullPath := filepath.Join(desktopPath, "DOMJudge", filePath)
+	
+	// Security check: ensure the file is within DOMJudge directory
+	domjudgePath := filepath.Join(desktopPath, "DOMJudge")
+	if !strings.HasPrefix(fullPath, domjudgePath) {
+		c.sendFileResponse("get", filePath, nil, "Access denied: file outside DOMJudge directory")
+		return
+	}
+	
+	// Read file content
+	content, err := ioutil.ReadFile(fullPath)
+	if err != nil {
+		c.sendFileResponse("get", filePath, nil, err.Error())
+		return
+	}
+	
+	// Encode content as base64 to handle binary files safely
+	encodedContent := base64.StdEncoding.EncodeToString(content)
+	
+	fileInfo := map[string]interface{}{
+		"name": filepath.Base(filePath),
+		"path": filePath,
+		"content": encodedContent,
+		"size": len(content),
+		"ext": strings.ToLower(filepath.Ext(filePath)),
+	}
+	
+	c.sendFileResponse("get", filePath, fileInfo, "")
+}
+
+func (c *Client) sendFileResponse(action, filePath string, data interface{}, errorMsg string) {
+	response := Message{
+		Type: "file_response",
+		Data: map[string]interface{}{
+			"action":   action,
+			"filePath": filePath,
+			"data":     data,
+			"error":    errorMsg,
+			"clientId": c.clientID,
+		},
+		Timestamp: time.Now(),
+	}
+	
+	if err := c.conn.WriteJSON(response); err != nil {
+		logError("Failed to send file response: %v", err)
 	}
 }
 

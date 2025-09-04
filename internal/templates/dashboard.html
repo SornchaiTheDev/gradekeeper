@@ -6,6 +6,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <!-- CodeMirror CSS and JS -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/theme/monokai.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/clike/clike.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/python/python.min.js"></script>
     <style>
         @keyframes slideInUp {
             0% {
@@ -101,6 +107,61 @@
         </div>
     </div>
 
+    <!-- File Viewer Modal -->
+    <div id="fileViewerModal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden">
+        <div class="flex items-center justify-center min-h-screen p-4">
+            <div class="bg-white rounded-lg max-w-6xl w-full max-h-[90vh] flex flex-col">
+                <!-- Modal Header -->
+                <div class="flex items-center justify-between p-6 border-b">
+                    <div class="flex items-center gap-3">
+                        <i data-lucide="folder-open" class="w-6 h-6 text-blue-600"></i>
+                        <h3 id="modalTitle" class="text-xl font-bold text-gray-800">Files - Client</h3>
+                    </div>
+                    <button onclick="closeFileViewer()" class="text-gray-400 hover:text-gray-600 p-2">
+                        <i data-lucide="x" class="w-5 h-5"></i>
+                    </button>
+                </div>
+                
+                <!-- Modal Body -->
+                <div class="flex flex-1 min-h-0">
+                    <!-- File List Sidebar -->
+                    <div class="w-1/3 border-r bg-gray-50 p-4 overflow-y-auto">
+                        <h4 class="font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                            <i data-lucide="files" class="w-4 h-4"></i>
+                            DOMJudge Files
+                        </h4>
+                        <div id="fileList" class="space-y-2">
+                            <!-- Files will be populated here -->
+                        </div>
+                    </div>
+                    
+                    <!-- Code Viewer -->
+                    <div class="flex-1 flex flex-col">
+                        <div id="fileViewerContent" class="flex-1 p-4">
+                            <div id="noFileSelected" class="flex items-center justify-center h-full text-gray-500">
+                                <div class="text-center">
+                                    <i data-lucide="file-text" class="w-16 h-16 mx-auto mb-4 text-gray-300"></i>
+                                    <p class="text-lg">Select a file to view</p>
+                                    <p class="text-sm">Choose a file from the list to see its contents</p>
+                                </div>
+                            </div>
+                            <div id="fileContent" class="hidden h-full">
+                                <div class="mb-3 flex items-center justify-between">
+                                    <div class="flex items-center gap-2">
+                                        <i data-lucide="file-code" class="w-4 h-4 text-blue-600"></i>
+                                        <span id="currentFileName" class="font-medium text-gray-800"></span>
+                                        <span id="currentFileSize" class="text-sm text-gray-500"></span>
+                                    </div>
+                                </div>
+                                <textarea id="codeEditor" class="w-full h-96"></textarea>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         const dashboardSecret = '{{.DashboardSecret}}';
         let ws;
@@ -143,6 +204,9 @@
                         log('Client ' + data.data.clientId + ': ' + data.data.action + ' -> ' + data.data.status + 
                             (data.data.error ? ' (Error: ' + data.data.error + ')' : ''));
                         refreshClients();
+                        break;
+                    case 'file_data':
+                        handleFileData(data.data);
                         break;
                 }
             };
@@ -238,6 +302,10 @@
                         '<button onclick="sendCommandToClient(\'' + client.id + '\', \'clear\')" ' + (isConnected ? '' : 'disabled ') + 'class="' + (isConnected ? 'bg-gray-600 hover:bg-gray-700 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed') + ' text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 justify-center">' +
                         '<i data-lucide="x" class="w-4 h-4"></i>Clear</button>' +
                         '</div>' +
+                        '<div class="mt-2">' +
+                        '<button onclick="viewClientFiles(\'' + client.id + '\', \'' + client.name + '\')" ' + (isConnected ? '' : 'disabled ') + 'class="' + (isConnected ? 'bg-purple-600 hover:bg-purple-700 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed') + ' text-sm px-3 py-2 rounded-md transition-colors duration-200 flex items-center gap-1 justify-center w-full">' +
+                        '<i data-lucide="folder-open" class="w-4 h-4"></i>View Files</button>' +
+                        '</div>' +
                         '</div>' +
                         '</div>';
                     }).join('');
@@ -314,6 +382,178 @@
                 log('💥 Starting complete clear for client ' + clientId + '...');
                 sendCommandToClient(clientId, 'clear');
                 log('✅ Clear command sent to client ' + clientId + '!');
+            }
+        }
+        
+        // File viewer functionality
+        let currentClient = null;
+        let codeEditor = null;
+        
+        function viewClientFiles(clientId, clientName) {
+            currentClient = { id: clientId, name: clientName };
+            document.getElementById('modalTitle').textContent = 'Files - ' + clientName;
+            document.getElementById('fileViewerModal').classList.remove('hidden');
+            
+            // Load file list
+            fetch('/api/files', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    clientId: clientId, 
+                    action: 'list' 
+                })
+            });
+            
+            // Re-initialize icons after modal content changes
+            setTimeout(() => lucide.createIcons(), 100);
+        }
+        
+        function handleFileData(data) {
+            if (!data || !data.clientId) return;
+            
+            // Only handle if it's for the currently viewed client
+            if (!currentClient || currentClient.id !== data.clientId) return;
+            
+            if (data.action === 'list') {
+                displayFileList(data.data, data.error);
+            } else if (data.action === 'get') {
+                displayFileContent(data.data);
+            }
+        }
+        
+        function displayFileList(files, error) {
+            const fileListEl = document.getElementById('fileList');
+            
+            if (error) {
+                fileListEl.innerHTML = '<div class="text-red-500 text-sm p-3 bg-red-50 rounded">' +
+                    '<i data-lucide="alert-circle" class="w-4 h-4 inline mr-2"></i>' + error + '</div>';
+                lucide.createIcons();
+                return;
+            }
+            
+            if (!files || files.length === 0) {
+                fileListEl.innerHTML = '<div class="text-gray-500 text-sm p-3 text-center">' +
+                    '<i data-lucide="folder-x" class="w-8 h-8 mx-auto mb-2"></i>' +
+                    '<p>No code files found</p>' +
+                    '<p class="text-xs mt-1">Supported: .cpp, .py, .c, .h</p></div>';
+                lucide.createIcons();
+                return;
+            }
+            
+            fileListEl.innerHTML = files.map(file => {
+                const icon = getFileIcon(file.ext);
+                const modifiedDate = new Date(file.modified).toLocaleDateString();
+                return '<div class="p-3 bg-white rounded-lg border hover:border-blue-300 cursor-pointer transition-colors" onclick="selectFile(\'' + file.name + '\', \'' + file.ext + '\')">' +
+                    '<div class="flex items-center gap-2 mb-1">' +
+                    '<i data-lucide="' + icon + '" class="w-4 h-4 text-blue-600"></i>' +
+                    '<span class="font-medium text-sm truncate">' + file.name + '</span>' +
+                    '</div>' +
+                    '<div class="text-xs text-gray-500">' +
+                    '<div>' + formatFileSize(file.size) + '</div>' +
+                    '<div>' + modifiedDate + '</div>' +
+                    '</div>' +
+                    '</div>';
+            }).join('');
+            
+            lucide.createIcons();
+        }
+        
+        function closeFileViewer() {
+            document.getElementById('fileViewerModal').classList.add('hidden');
+            document.getElementById('noFileSelected').classList.remove('hidden');
+            document.getElementById('fileContent').classList.add('hidden');
+            document.getElementById('fileList').innerHTML = '';
+            currentClient = null;
+            if (codeEditor) {
+                codeEditor.getDoc().setValue('');
+            }
+        }
+        
+        function selectFile(fileName, fileExt) {
+            if (!currentClient) return;
+            
+            log('Loading file: ' + fileName + ' from ' + currentClient.name);
+            
+            fetch('/api/files', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    clientId: currentClient.id, 
+                    action: 'get',
+                    filePath: fileName
+                })
+            });
+        }
+        
+        function displayFileContent(fileData) {
+            if (!fileData || fileData.error) {
+                log('Error loading file: ' + (fileData.error || 'Unknown error'));
+                return;
+            }
+            
+            document.getElementById('noFileSelected').classList.add('hidden');
+            document.getElementById('fileContent').classList.remove('hidden');
+            
+            document.getElementById('currentFileName').textContent = fileData.name;
+            document.getElementById('currentFileSize').textContent = '(' + formatFileSize(fileData.size) + ')';
+            
+            // Decode base64 content
+            const content = atob(fileData.content);
+            
+            // Initialize CodeMirror if not already done
+            if (!codeEditor) {
+                codeEditor = CodeMirror.fromTextArea(document.getElementById('codeEditor'), {
+                    lineNumbers: true,
+                    readOnly: true,
+                    theme: 'monokai',
+                    mode: getCodeMirrorMode(fileData.ext)
+                });
+            } else {
+                codeEditor.setOption('mode', getCodeMirrorMode(fileData.ext));
+            }
+            
+            codeEditor.getDoc().setValue(content);
+            codeEditor.refresh();
+        }
+        
+        function getCodeMirrorMode(ext) {
+            switch (ext) {
+                case '.cpp':
+                case '.c':
+                case '.cc':
+                case '.cxx':
+                case '.hpp':
+                case '.h':
+                    return 'text/x-c++src';
+                case '.py':
+                    return 'python';
+                default:
+                    return 'text/plain';
+            }
+        }
+        
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+        
+        function getFileIcon(ext) {
+            switch (ext) {
+                case '.cpp':
+                case '.c':
+                case '.cc':
+                case '.cxx':
+                    return 'cpu';
+                case '.py':
+                    return 'zap';
+                case '.h':
+                case '.hpp':
+                    return 'file-text';
+                default:
+                    return 'file';
             }
         }
         

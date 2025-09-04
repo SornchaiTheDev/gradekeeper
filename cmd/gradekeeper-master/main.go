@@ -388,6 +388,14 @@ func (m *Master) handleClientMessage(clientID string, msg Message) {
 	case "action_status":
 		// Client sending action status update
 		m.handleActionStatus(clientID, msg.Data)
+	case "file_response":
+		// Client sending file data response
+		log.Printf("Client %s file response", clientID)
+		m.broadcastToDashboard(Message{
+			Type: "file_data",
+			Data: msg.Data,
+			Timestamp: time.Now(),
+		})
 	case "heartbeat":
 		// Client sending heartbeat - update last heartbeat time
 		m.clientsMu.Lock()
@@ -555,6 +563,58 @@ func (m *Master) handleAPIClients(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(clients)
 }
 
+func (m *Master) handleAPIFiles(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		ClientID string `json:"clientId"`
+		Action   string `json:"action"` // "list" or "get"
+		FilePath string `json:"filePath,omitempty"` // for "get" action
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if req.ClientID == "" || req.Action == "" {
+		http.Error(w, "clientId and action are required", http.StatusBadRequest)
+		return
+	}
+
+	m.clientsMu.RLock()
+	conn, exists := m.clients[req.ClientID]
+	m.clientsMu.RUnlock()
+
+	if !exists {
+		http.Error(w, "Client not found", http.StatusNotFound)
+		return
+	}
+
+	// Send file command to client
+	cmd := Message{
+		Type: "file_command",
+		Data: map[string]interface{}{
+			"action":   req.Action,
+			"filePath": req.FilePath,
+		},
+		Timestamp: time.Now(),
+	}
+
+	if err := conn.WriteJSON(cmd); err != nil {
+		log.Printf("Error sending file command to client %s: %v", req.ClientID, err)
+		http.Error(w, "Failed to send command to client", http.StatusInternalServerError)
+		return
+	}
+
+	// For now, return success. In a real implementation, you'd want to wait for the client response
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "command_sent"})
+}
+
 func main() {
 	master := NewMaster()
 
@@ -566,6 +626,7 @@ func main() {
 	http.HandleFunc("/ws", master.handleWebSocket)
 	http.HandleFunc("/api/command", master.handleAPICommand)
 	http.HandleFunc("/api/clients", master.handleAPIClients)
+	http.HandleFunc("/api/files", master.handleAPIFiles)
 
 	fmt.Println("🎓 GradeKeeper Master Server starting...")
 	fmt.Println("📊 Dashboard: http://localhost:8080")
