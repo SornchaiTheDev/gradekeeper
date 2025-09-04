@@ -16,35 +16,34 @@ clean:
 # Build master server for all platforms
 build-master: dist
 	@echo "Building Master Server..."
-	cd master && go mod tidy
-	cd master && GOOS=linux GOARCH=amd64 go build -o ../dist/gradekeeper-master-linux-amd64 main.go
-	cd master && GOOS=windows GOARCH=amd64 go build -o ../dist/gradekeeper-master-windows-amd64.exe main.go
-	cd master && GOOS=darwin GOARCH=amd64 go build -o ../dist/gradekeeper-master-darwin-amd64 main.go
-	cd master && GOOS=darwin GOARCH=arm64 go build -o ../dist/gradekeeper-master-darwin-arm64 main.go
+	go mod tidy
+	GOOS=linux GOARCH=amd64 go build -o dist/gradekeeper-master-linux-amd64 ./cmd/gradekeeper-master
+	GOOS=windows GOARCH=amd64 go build -o dist/gradekeeper-master-windows-amd64.exe ./cmd/gradekeeper-master
+	GOOS=darwin GOARCH=amd64 go build -o dist/gradekeeper-master-darwin-amd64 ./cmd/gradekeeper-master
+	GOOS=darwin GOARCH=arm64 go build -o dist/gradekeeper-master-darwin-arm64 ./cmd/gradekeeper-master
 
 # Build client for all platforms
 build-client: dist
 	@echo "Building Cross-Platform Client..."
-	go mod tidy
-	GOOS=linux GOARCH=amd64 go build -o dist/gradekeeper-client-linux-amd64 client-crossplatform.go
-	GOOS=windows GOARCH=amd64 go build -o dist/gradekeeper-client-windows-amd64.exe client-crossplatform.go
-	GOOS=darwin GOARCH=amd64 go build -o dist/gradekeeper-client-darwin-amd64 client-crossplatform.go
-	GOOS=darwin GOARCH=arm64 go build -o dist/gradekeeper-client-darwin-arm64 client-crossplatform.go
+	GOOS=linux GOARCH=amd64 go build -o dist/gradekeeper-client-linux-amd64 ./cmd/gradekeeper-client
+	GOOS=windows GOARCH=amd64 go build -o dist/gradekeeper-client-windows-amd64.exe ./cmd/gradekeeper-client
+	GOOS=darwin GOARCH=amd64 go build -o dist/gradekeeper-client-darwin-amd64 ./cmd/gradekeeper-client
+	GOOS=darwin GOARCH=arm64 go build -o dist/gradekeeper-client-darwin-arm64 ./cmd/gradekeeper-client
 
 # Build standalone for all platforms
 build-standalone: dist
 	@echo "Building Cross-Platform Standalone..."
-	GOOS=linux GOARCH=amd64 go build -o dist/gradekeeper-standalone-linux-amd64 standalone-crossplatform.go
-	GOOS=windows GOARCH=amd64 go build -o dist/gradekeeper-standalone-windows-amd64.exe standalone-crossplatform.go
-	GOOS=darwin GOARCH=amd64 go build -o dist/gradekeeper-standalone-darwin-amd64 standalone-crossplatform.go
-	GOOS=darwin GOARCH=arm64 go build -o dist/gradekeeper-standalone-darwin-arm64 standalone-crossplatform.go
+	GOOS=linux GOARCH=amd64 go build -o dist/gradekeeper-standalone-linux-amd64 ./cmd/gradekeeper-standalone
+	GOOS=windows GOARCH=amd64 go build -o dist/gradekeeper-standalone-windows-amd64.exe ./cmd/gradekeeper-standalone
+	GOOS=darwin GOARCH=amd64 go build -o dist/gradekeeper-standalone-darwin-amd64 ./cmd/gradekeeper-standalone
+	GOOS=darwin GOARCH=arm64 go build -o dist/gradekeeper-standalone-darwin-arm64 ./cmd/gradekeeper-standalone
 
 # Build for current platform only
 build-local: dist
 	@echo "Building for current platform ($(shell go env GOOS)/$(shell go env GOARCH))..."
-	cd master && go build -o ../dist/gradekeeper-master main.go
-	go build -o dist/gradekeeper-client client-crossplatform.go
-	go build -o dist/gradekeeper-standalone standalone-crossplatform.go
+	go build -o dist/gradekeeper-master ./cmd/gradekeeper-master
+	go build -o dist/gradekeeper-client ./cmd/gradekeeper-client
+	go build -o dist/gradekeeper-standalone ./cmd/gradekeeper-standalone
 
 # Test builds by running simple version check
 test:
@@ -60,13 +59,13 @@ show:
 
 # Development helpers
 dev-master:
-	cd master && go run main.go
+	go run ./cmd/gradekeeper-master
 
 dev-client:
-	go run client-crossplatform.go -standalone
+	go run ./cmd/gradekeeper-client -standalone
 
 dev-standalone:
-	go run standalone-crossplatform.go
+	go run ./cmd/gradekeeper-standalone
 
 help:
 	@echo "GradeKeeper Build Commands:"

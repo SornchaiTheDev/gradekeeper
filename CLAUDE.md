@@ -39,22 +39,23 @@ build-all.bat                # Windows
 
 ### Individual Components:
 ```bash
-# Cross-platform versions (recommended)
-go build -o gradekeeper-standalone standalone-crossplatform.go
-go build -o gradekeeper-client client-crossplatform.go
-cd master && go build -o gradekeeper-master main.go
+# Build individual executables
+go build -o gradekeeper-standalone ./cmd/gradekeeper-standalone
+go build -o gradekeeper-client ./cmd/gradekeeper-client
+go build -o gradekeeper-master ./cmd/gradekeeper-master
 
-# Legacy build scripts (now use cross-platform files)
-./build-all.sh                # Builds Windows executables using cross-platform source
-build-all.bat                 # Builds Windows executables using cross-platform source
+# Legacy build scripts (Windows executables)
+./build-all.sh                # Builds Windows executables
+build-all.bat                 # Builds Windows executables
 ```
 
 ## Architecture
 
 ### Core Components:
-1. **`standalone-crossplatform.go`** - Cross-platform standalone application  
-2. **`client-crossplatform.go`** - Cross-platform WebSocket client with standalone fallback
-3. **`master/main.go`** - Master server with web dashboard
+1. **`cmd/gradekeeper-standalone/main.go`** - Cross-platform standalone application  
+2. **`cmd/gradekeeper-client/main.go`** - Cross-platform WebSocket client with standalone fallback
+3. **`cmd/gradekeeper-master/main.go`** - Master server with web dashboard
+4. **`internal/platform/platform.go`** - Shared cross-platform functionality
 
 ### Key Functions:
 - `getDesktopPath()` - Cross-platform desktop detection (Windows: USERPROFILE, Linux: XDG/~, macOS: ~)
@@ -72,10 +73,11 @@ build-all.bat                 # Builds Windows executables using cross-platform 
 
 ## Development Notes
 
+- **Standard Go Project Layout**: Uses `cmd/` directory for executables
 - **Cross-platform Support**: Works on Windows, Linux, and macOS
+- **Shared Library**: Common platform code in `internal/platform/`
 - **Runtime Detection**: Uses runtime.GOOS for platform-specific behavior  
 - **Executable Launching**: Platform-specific paths and commands for VS Code and browsers
 - **Desktop Detection**: XDG compliance on Linux, standard paths on Windows/macOS
 - **WebSocket Communication**: Real-time master-client communication
 - **Graceful Fallbacks**: Multiple fallback strategies for all external programs
-- **Clean Architecture**: Removed duplicate legacy Windows-only code

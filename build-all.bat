@@ -3,25 +3,21 @@ echo Building GradeKeeper Master and Client...
 
 echo.
 echo Building Master Server...
-cd master
 go mod tidy
 set GOOS=windows
 set GOARCH=amd64
-go build -o gradekeeper-master.exe main.go
+go build -o gradekeeper-master.exe ./cmd/gradekeeper-master
 if %ERRORLEVEL% == 0 (
     echo Master server built successfully!
-    move gradekeeper-master.exe ..
 ) else (
     echo Master server build failed!
 )
 
 echo.
 echo Building Client...
-cd ..
-go mod tidy
 set GOOS=windows
 set GOARCH=amd64
-go build -o gradekeeper-client.exe client-crossplatform.go
+go build -o gradekeeper-client.exe ./cmd/gradekeeper-client
 if %ERRORLEVEL% == 0 (
     echo Client built successfully!
 ) else (
@@ -30,7 +26,7 @@ if %ERRORLEVEL% == 0 (
 
 echo.
 echo Building Standalone Version...
-go build -o gradekeeper-standalone.exe standalone-crossplatform.go
+go build -o gradekeeper-standalone.exe ./cmd/gradekeeper-standalone
 if %ERRORLEVEL% == 0 (
     echo Standalone version built successfully!
     echo.

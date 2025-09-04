@@ -68,23 +68,23 @@ make dev-standalone   # Run standalone in development mode
 
 #### Build Individual Components:
 
-**Cross-platform versions:**
+**Individual executables:**
 ```bash
 # Standalone
-go build -o gradekeeper-standalone standalone-crossplatform.go
+go build -o gradekeeper-standalone ./cmd/gradekeeper-standalone
 
 # Client  
-go build -o gradekeeper-client client-crossplatform.go
+go build -o gradekeeper-client ./cmd/gradekeeper-client
 
 # Master server
-cd master && go build -o gradekeeper-master main.go
+go build -o gradekeeper-master ./cmd/gradekeeper-master
 ```
 
-**Legacy Windows-only versions:**
+**Legacy Windows build scripts:**
 ```bash
-# Original Windows-only versions (deprecated)
-GOOS=windows GOARCH=amd64 go build -o gradekeeper-standalone.exe main.go
-GOOS=windows GOARCH=amd64 go build -o gradekeeper-client.exe client.go
+# Windows executables using legacy build scripts
+./build-all.sh               # Linux/macOS cross-compilation to Windows
+build-all.bat                # Windows native build
 ```
 
 ## Usage
@@ -161,7 +161,7 @@ gradekeeper-client-windows-amd64.exe -standalone  # Windows
 ## Architecture
 
 ### Standalone Mode
-Cross-platform implementation (`standalone-crossplatform.go`) with core functions:
+Cross-platform implementation (`cmd/gradekeeper-standalone/main.go`) with core functions:
 - `getDesktopPath()` - Cross-platform desktop path detection:
   - Windows: `%USERPROFILE%\Desktop`
   - Linux: XDG Desktop directory or `~/Desktop`  
@@ -173,18 +173,23 @@ Cross-platform implementation (`standalone-crossplatform.go`) with core function
   - macOS: Chrome → `open` command
 
 ### Master-Client Mode
-**Master Server (`master/main.go`):**
+**Master Server (`cmd/gradekeeper-master/main.go`):**
 - WebSocket server for client communication
 - HTTP server for web dashboard
 - Command broadcasting to multiple clients
 - Real-time client status monitoring
 
-**Client (`client-crossplatform.go`):**
+**Client (`cmd/gradekeeper-client/main.go`):**
 - Cross-platform WebSocket client connecting to master server  
 - Platform-aware command execution engine
 - Status reporting to master
 - Fallback to standalone mode if no server specified
 - Works on Windows, Linux, and macOS
+
+**Shared Platform Library (`internal/platform/platform.go`):**
+- Cross-platform desktop path detection
+- VS Code launching with fallbacks
+- Browser opening with platform-specific implementations
 
 ### Communication Protocol
 - **WebSocket Messages**: JSON-formatted commands and status updates
@@ -196,7 +201,7 @@ Cross-platform implementation (`standalone-crossplatform.go`) with core function
 
 To modify the URLs that open in the browser, edit the `urls` slice in the relevant source file:
 
-**For standalone mode** (`standalone-crossplatform.go`):
+**For standalone mode** (`cmd/gradekeeper-standalone/main.go`):
 ```go
 urls := []string{
     "https://google.com",
@@ -206,7 +211,7 @@ urls := []string{
 }
 ```
 
-**For client mode** (`client-crossplatform.go`):
+**For client mode** (`cmd/gradekeeper-client/main.go`):
 ```go
 // In the openChromeAction() function
 urls := []string{

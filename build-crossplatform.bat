@@ -6,56 +6,52 @@ if not exist dist mkdir dist
 
 echo.
 echo Building Master Server...
-cd master
 go mod tidy
 
 REM Build master for different platforms
 echo   - Linux (amd64)
 set GOOS=linux
 set GOARCH=amd64
-go build -o ../dist/gradekeeper-master-linux-amd64 main.go
+go build -o dist/gradekeeper-master-linux-amd64 ./cmd/gradekeeper-master
 
 echo   - Windows (amd64)
 set GOOS=windows
 set GOARCH=amd64
-go build -o ../dist/gradekeeper-master-windows-amd64.exe main.go
+go build -o dist/gradekeeper-master-windows-amd64.exe ./cmd/gradekeeper-master
 
 echo   - macOS (amd64)
 set GOOS=darwin
 set GOARCH=amd64
-go build -o ../dist/gradekeeper-master-darwin-amd64 main.go
+go build -o dist/gradekeeper-master-darwin-amd64 ./cmd/gradekeeper-master
 
 echo   - macOS (arm64)
 set GOOS=darwin
 set GOARCH=arm64
-go build -o ../dist/gradekeeper-master-darwin-arm64 main.go
-
-cd ..
+go build -o dist/gradekeeper-master-darwin-arm64 ./cmd/gradekeeper-master
 
 echo.
 echo Building Cross-Platform Client...
-go mod tidy
 
 REM Build client for different platforms
 echo   - Linux (amd64)
 set GOOS=linux
 set GOARCH=amd64
-go build -o dist/gradekeeper-client-linux-amd64 client-crossplatform.go
+go build -o dist/gradekeeper-client-linux-amd64 ./cmd/gradekeeper-client
 
 echo   - Windows (amd64)
 set GOOS=windows
 set GOARCH=amd64
-go build -o dist/gradekeeper-client-windows-amd64.exe client-crossplatform.go
+go build -o dist/gradekeeper-client-windows-amd64.exe ./cmd/gradekeeper-client
 
 echo   - macOS (amd64)
 set GOOS=darwin
 set GOARCH=amd64
-go build -o dist/gradekeeper-client-darwin-amd64 client-crossplatform.go
+go build -o dist/gradekeeper-client-darwin-amd64 ./cmd/gradekeeper-client
 
 echo   - macOS (arm64)
 set GOOS=darwin
 set GOARCH=arm64
-go build -o dist/gradekeeper-client-darwin-arm64 client-crossplatform.go
+go build -o dist/gradekeeper-client-darwin-arm64 ./cmd/gradekeeper-client
 
 echo.
 echo Building Cross-Platform Standalone...
@@ -64,22 +60,22 @@ REM Build standalone for different platforms
 echo   - Linux (amd64)
 set GOOS=linux
 set GOARCH=amd64
-go build -o dist/gradekeeper-standalone-linux-amd64 standalone-crossplatform.go
+go build -o dist/gradekeeper-standalone-linux-amd64 ./cmd/gradekeeper-standalone
 
 echo   - Windows (amd64)
 set GOOS=windows
 set GOARCH=amd64
-go build -o dist/gradekeeper-standalone-windows-amd64.exe standalone-crossplatform.go
+go build -o dist/gradekeeper-standalone-windows-amd64.exe ./cmd/gradekeeper-standalone
 
 echo   - macOS (amd64)
 set GOOS=darwin
 set GOARCH=amd64
-go build -o dist/gradekeeper-standalone-darwin-amd64 standalone-crossplatform.go
+go build -o dist/gradekeeper-standalone-darwin-amd64 ./cmd/gradekeeper-standalone
 
 echo   - macOS (arm64)
 set GOOS=darwin
 set GOARCH=arm64
-go build -o dist/gradekeeper-standalone-darwin-arm64 standalone-crossplatform.go
+go build -o dist/gradekeeper-standalone-darwin-arm64 ./cmd/gradekeeper-standalone
 
 echo.
 echo Build complete! Generated files in dist/:
