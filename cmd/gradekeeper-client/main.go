@@ -297,6 +297,13 @@ func (c *Client) executeCommand(action string) {
 			"status": "completed",
 			"error":  errorToString(err),
 		}
+	case "setupAll":
+		err = c.setupAllAction()
+		result = map[string]interface{}{
+			"action": action,
+			"status": "completed",
+			"error":  errorToString(err),
+		}
 	case "clear":
 		err = c.clearEnvironmentAction()
 		result = map[string]interface{}{
@@ -363,6 +370,36 @@ func (c *Client) openChromeAction() error {
 	}
 
 	logSuccess("Browser opened successfully with multiple tabs in incognito mode!")
+	return nil
+}
+
+func (c *Client) setupAllAction() error {
+	logInfo("Starting complete environment setup...")
+
+	// Step 1: Setup environment (create DOMJudge folder)
+	logInfo("Creating DOMJudge folder...")
+	err := c.setupEnvironment()
+	if err != nil {
+		return fmt.Errorf("setup failed: %v", err)
+	}
+
+	// Step 2: Open VS Code
+	logInfo("Opening VS Code...")
+	err = c.openVSCodeAction()
+	if err != nil {
+		logWarning("VS Code opening failed: %v", err)
+		// Don't return error, continue with browser
+	}
+
+	// Step 3: Open browser
+	logInfo("Opening browser with multiple tabs...")
+	err = c.openChromeAction()
+	if err != nil {
+		logWarning("Browser opening failed: %v", err)
+		// Don't return error, setup is mostly complete
+	}
+
+	logSuccess("Complete environment setup finished!")
 	return nil
 }
 

@@ -658,23 +658,8 @@ func (m *Master) handleDashboard(w http.ResponseWriter, r *http.Request) {
         
         function setupAll() {
             log('🚀 Starting complete setup for all clients...');
-            const commands = ['setup', 'open-vscode', 'open-chrome'];
-            let currentCommand = 0;
-            
-            function executeNext() {
-                if (currentCommand < commands.length) {
-                    const action = commands[currentCommand];
-                    sendCommand(action);
-                    currentCommand++;
-                    
-                    // Wait a bit between commands to avoid overwhelming clients
-                    setTimeout(executeNext, 1000);
-                } else {
-                    log('✅ Complete setup finished for all clients!');
-                }
-            }
-            
-            executeNext();
+            sendCommand('setupAll');
+            log('Sent setupAll command to all clients');
         }
         
         function clearAll() {
@@ -687,23 +672,8 @@ func (m *Master) handleDashboard(w http.ResponseWriter, r *http.Request) {
         
         function setupAllForClient(clientId) {
             log('🚀 Starting complete setup for client ' + clientId + '...');
-            const commands = ['setup', 'open-vscode', 'open-chrome'];
-            let currentCommand = 0;
-            
-            function executeNext() {
-                if (currentCommand < commands.length) {
-                    const action = commands[currentCommand];
-                    sendCommandToClient(clientId, action);
-                    currentCommand++;
-                    
-                    // Wait a bit between commands
-                    setTimeout(executeNext, 1000);
-                } else {
-                    log('✅ Complete setup finished for client ' + clientId + '!');
-                }
-            }
-            
-            executeNext();
+            sendCommandToClient(clientId, 'setupAll');
+            log('Sent setupAll command to client ' + clientId);
         }
         
         function clearAllForClient(clientId) {
