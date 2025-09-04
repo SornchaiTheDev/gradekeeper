@@ -530,7 +530,15 @@ func main() {
 	// Command line flags
 	var serverURL = flag.String("server", "", "Master server WebSocket URL (e.g., ws://192.168.1.100:8080/ws)")
 	var standalone = flag.Bool("standalone", false, "Run in standalone mode")
+	var clear = flag.Bool("clear", false, "Clear environment (remove DOMJudge folder and close applications)")
 	flag.Parse()
+
+	// If clear flag is set, run clear environment and exit
+	if *clear {
+		logInfo("Running in clear mode...")
+		runClear()
+		return
+	}
 
 	// If standalone mode or no server specified, run original functionality
 	if *standalone || *serverURL == "" {
@@ -646,6 +654,40 @@ func runStandalone() {
 		}
 	case <-interrupt:
 		logInfo("\nInterrupt received, exiting standalone mode...")
+		os.Exit(0)
+	}
+}
+
+func runClear() {
+	// Handle interrupt signal for clear mode
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt)
+
+	// Run clear operation in a goroutine so we can handle interrupts
+	done := make(chan bool, 1)
+
+	go func() {
+		// Use the clearEnvironmentAction method
+		client := &Client{} // Create empty client just to use the method
+		err := client.clearEnvironmentAction()
+		if err != nil {
+			logError("Clear operation failed: %v", err)
+			done <- false
+			return
+		}
+
+		logSuccess("Clear operation completed successfully!")
+		done <- true
+	}()
+
+	// Wait for completion or interrupt
+	select {
+	case success := <-done:
+		if !success {
+			os.Exit(1)
+		}
+	case <-interrupt:
+		logInfo("\nInterrupt received, exiting clear mode...")
 		os.Exit(0)
 	}
 }
