@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Gradekeeper is a cross-platform CLI application written in Go that automates development environment setup for Windows, Linux, and macOS users. It supports both standalone mode and master-client architecture for managing multiple computers.
 
-**Standalone Mode**: Creates a "DOMJudge" folder on the user's Desktop, opens VS Code with that folder, and launches the default browser with multiple tabs.
+**Standalone Mode**: Creates a "DOMJudge" folder on the user's Desktop, opens VS Code with that folder, and launches the browser with multiple tabs in incognito/private mode.
 
-**Master-Client Mode**: Provides centralized control over multiple computers (any supported OS) through WebSocket communication and a web dashboard.
+**Master-Client Mode**: Provides centralized control over multiple computers (any supported OS) through WebSocket communication and a web dashboard. Includes setup, VS Code opening, browser launching in incognito mode, and environment clearing commands.
 
 ## Technology Stack
 
@@ -60,14 +60,17 @@ build-all.bat                 # Builds Windows executables
 ### Key Functions:
 - `getDesktopPath()` - Cross-platform desktop detection (Windows: USERPROFILE, Linux: XDG/~, macOS: ~)
 - `openVSCode()` - Platform-specific VS Code launching with multiple fallback paths
-- `openBrowserWithTabs()` - Cross-platform browser opening with multiple fallbacks per OS
-- `openChromeWindows()` - Windows-specific Chrome launching
-- `openBrowserLinux()` - Linux-specific browser launching (Chrome/Chromium/Firefox → xdg-open)
-- `openBrowserMacOS()` - macOS-specific browser launching (Chrome → open command)
+- `openBrowserWithTabs()` - Cross-platform browser opening with incognito/private mode and multiple fallbacks per OS
+- `openChromeWindows()` - Windows-specific Chrome launching with --incognito flag
+- `openBrowserLinux()` - Linux-specific browser launching (Chrome/Chromium with --incognito, Firefox with --private-window)
+- `openBrowserMacOS()` - macOS-specific browser launching (Chrome with --incognito flag)
+- `ClearEnvironment()` - Removes DOMJudge folder and closes VS Code and browser processes
+- `closeVSCode()` - Cross-platform VS Code process termination
+- `closeBrowser()` - Cross-platform browser process termination
 
 ### Master-Client Architecture:
 - **WebSocket Communication**: Real-time command execution
-- **Command Types**: `setup`, `open-vscode`, `open-chrome`
+- **Command Types**: `setup`, `open-vscode`, `open-chrome`, `clear`
 - **Web Dashboard**: HTML interface at `http://localhost:8080`
 - **Client Management**: Connection tracking and status monitoring
 
@@ -81,3 +84,5 @@ build-all.bat                 # Builds Windows executables
 - **Desktop Detection**: XDG compliance on Linux, standard paths on Windows/macOS
 - **WebSocket Communication**: Real-time master-client communication
 - **Graceful Fallbacks**: Multiple fallback strategies for all external programs
+- **Incognito Mode**: All browser launches use incognito/private browsing mode
+- **Environment Cleanup**: Clear command removes folders and closes applications

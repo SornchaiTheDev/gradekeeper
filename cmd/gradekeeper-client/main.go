@@ -11,8 +11,8 @@ import (
 	"runtime"
 	"time"
 
-	"gradekeeper/internal/platform"
 	"github.com/gorilla/websocket"
+	"gradekeeper/internal/platform"
 )
 
 type Message struct {
@@ -27,11 +27,12 @@ type Command struct {
 }
 
 type Client struct {
-	conn     *websocket.Conn
+	conn      *websocket.Conn
 	serverURL string
 	clientID  string
-	done     chan struct{}
+	done      chan struct{}
 	reconnect chan struct{}
+	shutdown  chan struct{}
 	retrying  bool
 }
 
@@ -41,6 +42,7 @@ func NewClient(serverURL string) *Client {
 		clientID:  generateClientID(),
 		done:      make(chan struct{}),
 		reconnect: make(chan struct{}),
+		shutdown:  make(chan struct{}),
 	}
 }
 
@@ -66,14 +68,31 @@ func (c *Client) connect() error {
 func (c *Client) connectWithRetry() {
 	backoff := time.Second
 	maxBackoff := 30 * time.Second
-	
+
 	for {
+		// Check if shutdown was requested before attempting connection
+		select {
+		case <-c.shutdown:
+			log.Println("Shutdown requested, stopping connection attempts...")
+			return
+		default:
+			// Continue with connection attempt
+		}
+
 		c.retrying = true
 		err := c.connect()
 		if err != nil {
 			log.Printf("Connection failed: %v. Retrying in %v...", err, backoff)
-			time.Sleep(backoff)
-			
+
+			// Use select to check for shutdown during sleep
+			select {
+			case <-time.After(backoff):
+				// Continue with retry
+			case <-c.shutdown:
+				log.Println("Shutdown requested during retry, exiting...")
+				return
+			}
+
 			// Exponential backoff with max limit
 			backoff *= 2
 			if backoff > maxBackoff {
@@ -81,11 +100,11 @@ func (c *Client) connectWithRetry() {
 			}
 			continue
 		}
-		
+
 		// Successfully connected
 		c.retrying = false
 		c.sendStatus("connected")
-		
+
 		// Start listening for messages
 		go c.listen()
 		break
@@ -94,14 +113,37 @@ func (c *Client) connectWithRetry() {
 
 func (c *Client) listen() {
 	for {
+		// Check if shutdown was requested
+		select {
+		case <-c.shutdown:
+			log.Println("Shutdown requested, stopping message listener...")
+			return
+		default:
+			// Continue with message reading
+		}
+
 		var msg Message
 		err := c.conn.ReadJSON(&msg)
 		if err != nil {
 			log.Printf("WebSocket read error: %v", err)
-			if !c.retrying {
-				c.reconnect <- struct{}{}
+			
+			// Check if we're shutting down before attempting reconnect
+			select {
+			case <-c.shutdown:
+				log.Println("Shutdown in progress, not triggering reconnect...")
+				return
+			default:
+				if !c.retrying {
+					select {
+					case c.reconnect <- struct{}{}:
+						// Successfully sent reconnect signal
+					case <-c.shutdown:
+						// Shutdown requested while trying to signal reconnect
+						return
+					}
+				}
+				return
 			}
-			return
 		}
 
 		c.handleMessage(msg)
@@ -153,6 +195,13 @@ func (c *Client) executeCommand(action string) {
 		}
 	case "open-chrome":
 		err = c.openChromeAction()
+		result = map[string]interface{}{
+			"action": action,
+			"status": "completed",
+			"error":  errorToString(err),
+		}
+	case "clear":
+		err = c.clearEnvironmentAction()
 		result = map[string]interface{}{
 			"action": action,
 			"status": "completed",
@@ -221,11 +270,29 @@ func (c *Client) openChromeAction() error {
 		return fmt.Errorf("error opening browser: %v", err)
 	}
 
-	fmt.Println("Browser opened successfully with multiple tabs!")
+	fmt.Println("Browser opened successfully with multiple tabs in incognito mode!")
+	return nil
+}
+
+func (c *Client) clearEnvironmentAction() error {
+	fmt.Println("Clearing environment...")
+
+	err := platform.ClearEnvironment()
+	if err != nil {
+		return fmt.Errorf("error clearing environment: %v", err)
+	}
+
+	fmt.Println("Environment cleared successfully!")
 	return nil
 }
 
 func (c *Client) sendResult(result map[string]interface{}) {
+	// Check if connection exists
+	if c.conn == nil {
+		log.Printf("Cannot send result: no connection")
+		return
+	}
+
 	msg := Message{
 		Type:      "result",
 		Data:      result,
@@ -235,12 +302,24 @@ func (c *Client) sendResult(result map[string]interface{}) {
 	if err := c.conn.WriteJSON(msg); err != nil {
 		log.Printf("Error sending result: %v", err)
 		if !c.retrying {
-			c.reconnect <- struct{}{}
+			select {
+			case c.reconnect <- struct{}{}:
+				// Successfully sent reconnect signal
+			case <-c.shutdown:
+				// Shutdown requested while trying to signal reconnect
+				return
+			}
 		}
 	}
 }
 
 func (c *Client) sendStatus(status string) {
+	// Check if connection exists
+	if c.conn == nil {
+		log.Printf("Cannot send status '%s': no connection", status)
+		return
+	}
+
 	msg := Message{
 		Type: "status",
 		Data: map[string]interface{}{
@@ -253,7 +332,13 @@ func (c *Client) sendStatus(status string) {
 	if err := c.conn.WriteJSON(msg); err != nil {
 		log.Printf("Error sending status: %v", err)
 		if !c.retrying {
-			c.reconnect <- struct{}{}
+			select {
+			case c.reconnect <- struct{}{}:
+				// Successfully sent reconnect signal
+			case <-c.shutdown:
+				// Shutdown requested while trying to signal reconnect
+				return
+			}
 		}
 	}
 }
@@ -305,65 +390,106 @@ func main() {
 	signal.Notify(interrupt, os.Interrupt)
 
 	// Initial connection
-	client.connectWithRetry()
+	go client.connectWithRetry()
 
 	// Keep client running with auto-reconnect
 	for {
 		select {
 		case <-client.reconnect:
 			log.Println("Connection lost, attempting to reconnect...")
-			client.connectWithRetry()
+			go client.connectWithRetry()
 		case <-interrupt:
 			log.Println("Interrupt received, closing connection...")
 			client.retrying = true
-			client.sendStatus("disconnecting")
+			
+			// Signal all goroutines to shutdown
+			close(client.shutdown)
+
+			// Try to send disconnecting status with timeout
+			done := make(chan struct{})
+			go func() {
+				client.sendStatus("disconnecting")
+				close(done)
+			}()
+
+			select {
+			case <-done:
+				// Status sent successfully
+			case <-time.After(2 * time.Second):
+				// Timeout, proceed with shutdown
+				log.Println("Timeout sending disconnect status, forcing shutdown...")
+			}
+
 			client.close()
+			log.Println("Client shutdown complete.")
 			return
 		}
 	}
 }
 
 func runStandalone() {
-	// Cross-platform standalone functionality
-	desktopPath, err := platform.GetDesktopPath()
-	if err != nil {
-		fmt.Printf("Error getting desktop path: %v\n", err)
-		os.Exit(1)
-	}
+	// Handle interrupt signal for standalone mode
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt)
 
-	// Create DOMJudge folder
-	domjudgePath := filepath.Join(desktopPath, "DOMJudge")
-	fmt.Printf("Creating folder: %s\n", domjudgePath)
+	// Run standalone operations in a goroutine so we can handle interrupts
+	done := make(chan bool, 1)
 
-	err = os.MkdirAll(domjudgePath, os.ModePerm)
-	if err != nil {
-		fmt.Printf("Error creating folder: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println("DOMJudge folder created successfully!")
+	go func() {
+		// Cross-platform standalone functionality
+		desktopPath, err := platform.GetDesktopPath()
+		if err != nil {
+			fmt.Printf("Error getting desktop path: %v\n", err)
+			done <- false
+			return
+		}
 
-	// Open VS Code with the folder
-	fmt.Println("Opening VS Code...")
-	err = platform.OpenVSCode(domjudgePath)
-	if err != nil {
-		fmt.Printf("Error opening VS Code: %v\n", err)
-	} else {
-		fmt.Println("VS Code opened successfully!")
-	}
+		// Create DOMJudge folder
+		domjudgePath := filepath.Join(desktopPath, "DOMJudge")
+		fmt.Printf("Creating folder: %s\n", domjudgePath)
 
-	// Open browser with multiple tabs
-	fmt.Println("Opening browser with multiple tabs...")
-	urls := []string{
-		"https://google.com",
-		"https://github.com",
-		"https://stackoverflow.com",
-	}
-	err = platform.OpenBrowserWithTabs(urls)
-	if err != nil {
-		fmt.Printf("Error opening browser: %v\n", err)
-	} else {
-		fmt.Printf("Browser opened successfully with multiple tabs on %s!\n", runtime.GOOS)
-	}
+		err = os.MkdirAll(domjudgePath, os.ModePerm)
+		if err != nil {
+			fmt.Printf("Error creating folder: %v\n", err)
+			done <- false
+			return
+		}
+		fmt.Println("DOMJudge folder created successfully!")
 
-	fmt.Println("All tasks completed!")
+		// Open VS Code with the folder
+		fmt.Println("Opening VS Code...")
+		err = platform.OpenVSCode(domjudgePath)
+		if err != nil {
+			fmt.Printf("Error opening VS Code: %v\n", err)
+		} else {
+			fmt.Println("VS Code opened successfully!")
+		}
+
+		// Open browser with multiple tabs
+		fmt.Println("Opening browser with multiple tabs...")
+		urls := []string{
+			"http://158.108.30.225:5678/form/07e92300-17f4-4265-be50-c42dae953ffb",
+			"http://http://158.108.16.32",
+		}
+		err = platform.OpenBrowserWithTabs(urls)
+		if err != nil {
+			fmt.Printf("Error opening browser: %v\n", err)
+		} else {
+			fmt.Printf("Browser opened successfully with multiple tabs in incognito mode on %s!\n", runtime.GOOS)
+		}
+
+		fmt.Println("All tasks completed!")
+		done <- true
+	}()
+
+	// Wait for completion or interrupt
+	select {
+	case success := <-done:
+		if !success {
+			os.Exit(1)
+		}
+	case <-interrupt:
+		fmt.Println("\nInterrupt received, exiting standalone mode...")
+		os.Exit(0)
+	}
 }

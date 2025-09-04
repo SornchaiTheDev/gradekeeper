@@ -279,7 +279,8 @@ func (m *Master) handleDashboard(w http.ResponseWriter, r *http.Request) {
     <div class="controls">
         <button class="btn" onclick="sendCommand('setup')">📁 Setup Environment (All)</button>
         <button class="btn" onclick="sendCommand('open-vscode')">💻 Open VS Code (All)</button>
-        <button class="btn" onclick="sendCommand('open-chrome')">🌐 Open Chrome (All)</button>
+        <button class="btn" onclick="sendCommand('open-chrome')">🌐 Open Chrome Incognito (All)</button>
+        <button class="btn danger" onclick="sendCommand('clear')">🧹 Clear Environment (All)</button>
         <button class="btn" onclick="refreshClients()">🔄 Refresh</button>
     </div>
 
@@ -360,6 +361,7 @@ func (m *Master) handleDashboard(w http.ResponseWriter, r *http.Request) {
                         '<button class="btn" onclick="sendCommandToClient(\'' + client.id + '\', \'setup\')">Setup</button>' +
                         '<button class="btn" onclick="sendCommandToClient(\'' + client.id + '\', \'open-vscode\')">VS Code</button>' +
                         '<button class="btn" onclick="sendCommandToClient(\'' + client.id + '\', \'open-chrome\')">Chrome</button>' +
+                        '<button class="btn danger" onclick="sendCommandToClient(\'' + client.id + '\', \'clear\')">Clear</button>' +
                         '</div>'
                     ).join('');
                 });
