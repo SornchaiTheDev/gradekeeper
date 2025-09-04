@@ -290,12 +290,12 @@ func closeVSCode() error {
 		}
 		fmt.Println("VS Code processes closed")
 	case "darwin":
-		// Close VS Code on macOS
-		cmd := exec.Command("pkill", "-f", "Visual Studio Code")
+		// Close VS Code on macOS gracefully using AppleScript
+		cmd := exec.Command("osascript", "-e", "tell application \"Visual Studio Code\" to quit")
 		err := cmd.Run()
 		if err != nil {
-			// Try alternative approach
-			cmd = exec.Command("osascript", "-e", "quit app \"Visual Studio Code\"")
+			// Fallback: force close if graceful quit fails
+			cmd = exec.Command("pkill", "-f", "Visual Studio Code")
 			cmd.Run()
 		}
 		fmt.Println("VS Code processes closed")
