@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Gradekeeper is a CLI application written in Go that automates development environment setup for Windows users. It creates a "DOMJudge" folder on the Windows Desktop, opens VS Code with that folder, and launches Chrome with multiple tabs (Google, GitHub, Stack Overflow).
+Gradekeeper is a CLI application written in Go that automates development environment setup for Windows users. It supports both standalone mode and master-client architecture for managing multiple computers.
+
+**Standalone Mode**: Creates a "DOMJudge" folder on the Windows Desktop, opens VS Code with that folder, and launches Chrome with multiple tabs.
+
+**Master-Client Mode**: Provides centralized control over multiple Windows computers through WebSocket communication and a web dashboard.
 
 ## Technology Stack
 
@@ -13,29 +17,47 @@ Gradekeeper is a CLI application written in Go that automates development enviro
 
 ## Build Commands
 
-### On Windows:
+### Build All Components:
+**On Windows:**
 ```bash
-build.bat
+build-all.bat
 ```
 
-### On Linux/macOS (cross-compilation):
+**On Linux/macOS (cross-compilation):**
 ```bash
-./build.sh
+./build-all.sh
 ```
 
-### Manual build:
+### Build Individual Components:
 ```bash
-GOOS=windows GOARCH=amd64 go build -o gradekeeper.exe main.go
+# Standalone version
+GOOS=windows GOARCH=amd64 go build -o gradekeeper-standalone.exe main.go
+
+# Client version
+GOOS=windows GOARCH=amd64 go build -o gradekeeper-client.exe client.go
+
+# Master server
+cd master && GOOS=windows GOARCH=amd64 go build -o gradekeeper-master.exe main.go
 ```
 
 ## Architecture
 
-The application is a single-file CLI tool (`main.go`) with the following key functions:
+### Core Components:
+1. **`main.go`** - Standalone application
+2. **`client.go`** - WebSocket client with standalone fallback
+3. **`master/main.go`** - Master server with web dashboard
 
+### Key Functions:
 - `getDesktopPath()` - Detects Windows Desktop path using USERPROFILE environment variable
-- `openVSCode()` - Attempts to launch VS Code with multiple fallback paths
+- `openVSCode()` - Attempts to launch VS Code with multiple fallback paths  
 - `openChromeWithTabs()` - Opens Chrome with multiple tabs, with fallback to default browser
 - `openChrome()` - Wrapper function for single URL (calls openChromeWithTabs)
+
+### Master-Client Architecture:
+- **WebSocket Communication**: Real-time command execution
+- **Command Types**: `setup`, `open-vscode`, `open-chrome`
+- **Web Dashboard**: HTML interface at `http://localhost:8080`
+- **Client Management**: Connection tracking and status monitoring
 
 ## Development Notes
 
