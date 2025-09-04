@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Build and test
+        run: |
+          go mod tidy
+          go build ./cmd/gradekeeper-master
+          go build ./cmd/gradekeeper-client  
+          go build ./cmd/gradekeeper-standalone
+          echo "✅ All components built successfully"
+
+  cross-platform-build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Test cross-platform builds
+        run: |
+          go mod tidy
+          mkdir -p dist
+          
+          # Test a subset of cross-platform builds
+          echo "Testing Linux builds..."
+          GOOS=linux GOARCH=amd64 go build -o dist/test-master-linux ./cmd/gradekeeper-master
+          GOOS=linux GOARCH=amd64 go build -o dist/test-client-linux ./cmd/gradekeeper-client
+          GOOS=linux GOARCH=amd64 go build -o dist/test-standalone-linux ./cmd/gradekeeper-standalone
+          
+          echo "Testing Windows builds..."
+          GOOS=windows GOARCH=amd64 go build -o dist/test-master-windows.exe ./cmd/gradekeeper-master
+          GOOS=windows GOARCH=amd64 go build -o dist/test-client-windows.exe ./cmd/gradekeeper-client
+          GOOS=windows GOARCH=amd64 go build -o dist/test-standalone-windows.exe ./cmd/gradekeeper-standalone
+          
+          echo "Testing macOS builds..."
+          GOOS=darwin GOARCH=amd64 go build -o dist/test-master-darwin ./cmd/gradekeeper-master
+          GOOS=darwin GOARCH=amd64 go build -o dist/test-client-darwin ./cmd/gradekeeper-client
+          GOOS=darwin GOARCH=amd64 go build -o dist/test-standalone-darwin ./cmd/gradekeeper-standalone
+          
+          ls -la dist/
+          echo "✅ Cross-platform builds successful"

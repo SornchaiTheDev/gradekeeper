@@ -1,0 +1,145 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Triggers on version tags like v1.0.0, v1.2.3, etc.
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Required for creating releases
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create dist directory
+        run: mkdir -p dist
+
+      - name: Build cross-platform binaries
+        run: |
+          echo "Building GradeKeeper Cross-Platform Release ${{ steps.get_version.outputs.VERSION }}..."
+          go mod tidy
+          
+          # Build master server for all platforms
+          echo "Building Master Server..."
+          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/gradekeeper-master-linux-amd64 ./cmd/gradekeeper-master
+          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/gradekeeper-master-windows-amd64.exe ./cmd/gradekeeper-master
+          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/gradekeeper-master-darwin-amd64 ./cmd/gradekeeper-master
+          GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/gradekeeper-master-darwin-arm64 ./cmd/gradekeeper-master
+          
+          # Build client for all platforms
+          echo "Building Client..."
+          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/gradekeeper-client-linux-amd64 ./cmd/gradekeeper-client
+          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/gradekeeper-client-windows-amd64.exe ./cmd/gradekeeper-client
+          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/gradekeeper-client-darwin-amd64 ./cmd/gradekeeper-client
+          GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/gradekeeper-client-darwin-arm64 ./cmd/gradekeeper-client
+          
+          # Build standalone for all platforms
+          echo "Building Standalone..."
+          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/gradekeeper-standalone-linux-amd64 ./cmd/gradekeeper-standalone
+          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/gradekeeper-standalone-windows-amd64.exe ./cmd/gradekeeper-standalone
+          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/gradekeeper-standalone-darwin-amd64 ./cmd/gradekeeper-standalone
+          GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/gradekeeper-standalone-darwin-arm64 ./cmd/gradekeeper-standalone
+
+      - name: Create checksums
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+          cat checksums.txt
+
+      - name: Create release notes
+        id: release_notes
+        run: |
+          cat > release_notes.md << EOF
+          # GradeKeeper ${{ steps.get_version.outputs.VERSION }}
+          
+          ## 📦 Downloads
+          
+          ### Master Server
+          - **Linux (amd64):** \`gradekeeper-master-linux-amd64\`
+          - **Windows (amd64):** \`gradekeeper-master-windows-amd64.exe\`
+          - **macOS (Intel):** \`gradekeeper-master-darwin-amd64\`
+          - **macOS (Apple Silicon):** \`gradekeeper-master-darwin-arm64\`
+          
+          ### Client
+          - **Linux (amd64):** \`gradekeeper-client-linux-amd64\`
+          - **Windows (amd64):** \`gradekeeper-client-windows-amd64.exe\`
+          - **macOS (Intel):** \`gradekeeper-client-darwin-amd64\`
+          - **macOS (Apple Silicon):** \`gradekeeper-client-darwin-arm64\`
+          
+          ### Standalone
+          - **Linux (amd64):** \`gradekeeper-standalone-linux-amd64\`
+          - **Windows (amd64):** \`gradekeeper-standalone-windows-amd64.exe\`
+          - **macOS (Intel):** \`gradekeeper-standalone-darwin-amd64\`
+          - **macOS (Apple Silicon):** \`gradekeeper-standalone-darwin-arm64\`
+          
+          ## ✨ Features
+          
+          - Cross-platform CLI application for automating development environment setup
+          - Standalone mode for individual use
+          - Master-client architecture for managing multiple computers
+          - Web dashboard for centralized control
+          - Persistent client connection tracking with heartbeat system
+          - Beautiful colored logging with intuitive icons
+          
+          ## 🚀 Quick Start
+          
+          ### Standalone Mode
+          \`\`\`bash
+          # Linux/macOS
+          chmod +x gradekeeper-standalone-*
+          ./gradekeeper-standalone-*
+          
+          # Windows
+          gradekeeper-standalone-windows-amd64.exe
+          \`\`\`
+          
+          ### Master-Client Mode
+          \`\`\`bash
+          # Start master server
+          ./gradekeeper-master-*
+          
+          # Connect client
+          ./gradekeeper-client-* --server ws://[master-ip]:8080/ws
+          \`\`\`
+          
+          ## 🔐 Security
+          
+          All binaries are built with \`-ldflags="-s -w"\` for optimized size and include SHA256 checksums for verification.
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: GradeKeeper ${{ steps.get_version.outputs.VERSION }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          files: |
+            dist/gradekeeper-master-linux-amd64
+            dist/gradekeeper-master-windows-amd64.exe
+            dist/gradekeeper-master-darwin-amd64
+            dist/gradekeeper-master-darwin-arm64
+            dist/gradekeeper-client-linux-amd64
+            dist/gradekeeper-client-windows-amd64.exe
+            dist/gradekeeper-client-darwin-amd64
+            dist/gradekeeper-client-darwin-arm64
+            dist/gradekeeper-standalone-linux-amd64
+            dist/gradekeeper-standalone-windows-amd64.exe
+            dist/gradekeeper-standalone-darwin-amd64
+            dist/gradekeeper-standalone-darwin-arm64
+            dist/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
