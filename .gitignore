@@ -1,5 +1,9 @@
 # Build artifacts
 dist/
+gradekeeper-master
+gradekeeper-client
+gradekeeper-standalone
+gradekeeper-clients.json
 
 # Go build cache
 *.exe
