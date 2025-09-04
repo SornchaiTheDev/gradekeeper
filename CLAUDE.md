@@ -19,34 +19,33 @@ Gradekeeper is a cross-platform CLI application written in Go that automates dev
 
 ## Build Commands
 
-### Recommended Cross-Platform Build:
+### Makefile Commands (Recommended):
 ```bash
-# Build all platforms
-./build-crossplatform.sh       # Linux/macOS
-build-crossplatform.bat        # Windows
-
-# Using Makefile (Linux/macOS)
-make all                       # All components, all platforms
+# Cross-platform builds
+make all                       # All components, all platforms  
+make build-master             # Master server only
+make build-client             # Client only
+make build-standalone         # Standalone only
 make build-local              # Current platform only
-make dev-standalone           # Development mode
+
+# Development helpers
+make dev-master               # Run master in development mode
+make dev-client               # Run client in development mode  
+make dev-standalone           # Run standalone in development mode
+
+# Utilities
+make clean                    # Remove build artifacts
+make test                     # Test builds completed successfully
+make show                     # Show built executables
+make help                     # Show all available commands
 ```
 
-### Legacy Windows-Only Build:
+### Manual Build (if needed):
 ```bash
-./build-all.sh               # Linux/macOS 
-build-all.bat                # Windows
-```
-
-### Individual Components:
-```bash
-# Build individual executables
-go build -o gradekeeper-standalone ./cmd/gradekeeper-standalone
-go build -o gradekeeper-client ./cmd/gradekeeper-client
-go build -o gradekeeper-master ./cmd/gradekeeper-master
-
-# Legacy build scripts (Windows executables)
-./build-all.sh                # Builds Windows executables
-build-all.bat                 # Builds Windows executables
+# Build individual components for current platform
+go build -o dist/gradekeeper-master ./cmd/gradekeeper-master
+go build -o dist/gradekeeper-client ./cmd/gradekeeper-client
+go build -o dist/gradekeeper-standalone ./cmd/gradekeeper-standalone
 ```
 
 ## Architecture
@@ -57,6 +56,7 @@ build-all.bat                 # Builds Windows executables
 3. **`cmd/gradekeeper-master/main.go`** - Master server with web dashboard
 4. **`internal/platform/platform.go`** - Shared cross-platform functionality
 5. **`internal/config/config.go`** - Centralized configuration for default URLs
+6. **`internal/templates/`** - HTML templates and template handling for web dashboard
 
 ### Key Functions:
 - `getDesktopPath()` - Cross-platform desktop detection (Windows: USERPROFILE, Linux: XDG/~, macOS: ~)
