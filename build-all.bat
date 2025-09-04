@@ -21,7 +21,7 @@ cd ..
 go mod tidy
 set GOOS=windows
 set GOARCH=amd64
-go build -o gradekeeper-client.exe client.go
+go build -o gradekeeper-client.exe client-crossplatform.go
 if %ERRORLEVEL% == 0 (
     echo Client built successfully!
 ) else (
@@ -30,7 +30,7 @@ if %ERRORLEVEL% == 0 (
 
 echo.
 echo Building Standalone Version...
-go build -o gradekeeper-standalone.exe main.go
+go build -o gradekeeper-standalone.exe standalone-crossplatform.go
 if %ERRORLEVEL% == 0 (
     echo Standalone version built successfully!
     echo.

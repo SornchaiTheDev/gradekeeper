@@ -17,7 +17,7 @@ echo ""
 echo "Building Client..."
 cd ..
 go mod tidy
-GOOS=windows GOARCH=amd64 go build -o gradekeeper-client.exe client.go
+GOOS=windows GOARCH=amd64 go build -o gradekeeper-client.exe client-crossplatform.go
 if [ $? -eq 0 ]; then
     echo "Client built successfully!"
 else
@@ -26,7 +26,7 @@ fi
 
 echo ""
 echo "Building Standalone Version..."
-GOOS=windows GOARCH=amd64 go build -o gradekeeper-standalone.exe main.go
+GOOS=windows GOARCH=amd64 go build -o gradekeeper-standalone.exe standalone-crossplatform.go
 if [ $? -eq 0 ]; then
     echo "Standalone version built successfully!"
     echo ""
