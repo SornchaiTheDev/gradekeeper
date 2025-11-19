@@ -776,6 +776,7 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
+	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(templates.StaticFileSystem())))
 	http.HandleFunc("/", master.handleDashboard)
 	http.HandleFunc("/ws", master.handleWebSocket)
 	http.HandleFunc("/api/command", master.handleAPICommand)

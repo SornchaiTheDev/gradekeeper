@@ -1,13 +1,30 @@
 package templates
 
 import (
-	_ "embed"
+	"embed"
 	"html/template"
 	"io"
+	"io/fs"
+	"net/http"
 )
 
-//go:embed dashboard.html
-var dashboardHTML string
+var (
+	//go:embed dashboard.html
+	dashboardHTML string
+
+	//go:embed static/*
+	staticFiles embed.FS
+)
+
+var staticHTTPFS http.FileSystem
+
+func init() {
+	sub, err := fs.Sub(staticFiles, "static")
+	if err != nil {
+		panic("failed to load embedded static files: " + err.Error())
+	}
+	staticHTTPFS = http.FS(sub)
+}
 
 // DashboardData contains the data needed for the dashboard template
 type DashboardData struct {
@@ -34,4 +51,9 @@ func NewDashboard() (*Dashboard, error) {
 // Render executes the dashboard template with the given data
 func (d *Dashboard) Render(w io.Writer, data DashboardData) error {
 	return d.template.Execute(w, data)
+}
+
+// StaticFileSystem returns an http.FileSystem for serving embedded static assets.
+func StaticFileSystem() http.FileSystem {
+	return staticHTTPFS
 }
