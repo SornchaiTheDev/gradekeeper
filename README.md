@@ -108,7 +108,9 @@ The application will:
 ### Master-Client Mode
 
 #### 1. Start the Master Server
+you can config master port by using `-port` flag
 On the control computer, run:
+
 ```bash
 # Linux
 ./gradekeeper-master-linux-amd64
