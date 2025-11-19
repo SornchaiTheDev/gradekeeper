@@ -199,28 +199,9 @@ Cross-platform implementation (`cmd/gradekeeper-standalone/main.go`) with core f
 
 ## Customization
 
-To modify the URLs that open in the browser, edit the `urls` slice in the relevant source file:
-
-**For standalone mode** (`cmd/gradekeeper-standalone/main.go`):
-```go
-urls := []string{
-    "https://google.com",
-    "https://github.com",
-    "https://stackoverflow.com",
-    // Add your custom URLs here
-}
-```
-
-**For client mode** (`cmd/gradekeeper-client/main.go`):
-```go
-// In the openChromeAction() function
-urls := []string{
-    "https://google.com",
-    "https://github.com",
-    "https://stackoverflow.com",
-    // Add your custom URLs here
-}
-```
+### Browser URLs
+- **Master/Client Mode**: Use the *Browser URLs* section on the master dashboard to add, remove, or reorder tabs. The master persists the configuration and pushes updates to every connected client automatically.
+- **Standalone Mode Defaults**: Update `internal/config/config.go` if you need to change the default set of URLs bundled with the standalone binary (also used as a fallback when the master has no data).
 
 ## Error Handling
 

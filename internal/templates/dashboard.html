@@ -89,6 +89,28 @@
         </div>
 
         <div class="bg-white rounded-lg shadow-sm p-6 mb-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-2 flex items-center gap-2">
+                <i data-lucide="globe" class="w-5 h-5"></i>
+                Browser URLs
+            </h2>
+            <p class="text-sm text-gray-600 mb-4">
+                These URLs will be opened on each client when Chrome is launched.
+            </p>
+            <div id="urlList" class="space-y-3"></div>
+            <div class="flex flex-wrap gap-3 mt-4">
+                <button onclick="addUrlField()" class="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-md flex items-center gap-2">
+                    <i data-lucide="plus" class="w-4 h-4"></i>
+                    Add URL
+                </button>
+                <button onclick="saveConfig()" class="bg-primary hover:bg-blue-700 text-white px-5 py-2 rounded-md flex items-center gap-2 shadow-sm">
+                    <i data-lucide="save" class="w-4 h-4"></i>
+                    Save URLs
+                </button>
+            </div>
+            <p id="configStatus" class="text-sm text-gray-500 mt-3"></p>
+        </div>
+
+        <div class="bg-white rounded-lg shadow-sm p-6 mb-6">
             <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
                 <i data-lucide="users" class="w-5 h-5"></i>
                 Connected Clients
@@ -166,6 +188,8 @@
         const dashboardSecret = '{{.DashboardSecret}}';
         let ws;
         let previousClientIds = new Set();
+        let currentConfig = { urls: [] };
+        let configStatusTimeout = null;
         
         // Initialize Lucide icons after DOM is loaded
         document.addEventListener('DOMContentLoaded', function() {
@@ -179,6 +203,7 @@
             ws.onopen = function() {
                 log('Dashboard connected to master server');
                 refreshClients();
+                loadConfig();
             };
             
             ws.onmessage = function(event) {
@@ -207,6 +232,11 @@
                         break;
                     case 'file_data':
                         handleFileData(data.data);
+                        break;
+                    case 'config_update':
+                        applyConfigUpdate(data.data);
+                        const urlCount = (data.data && Array.isArray(data.data.urls)) ? data.data.urls.length : 0;
+                        log('Configuration updated (' + urlCount + ' URLs)');
                         break;
                 }
             };
@@ -556,6 +586,148 @@
                     return 'file';
             }
         }
+
+        function loadConfig() {
+            fetch('/api/config')
+                .then(response => response.json())
+                .then(cfg => {
+                    applyConfigUpdate(cfg, true);
+                    setConfigStatus('Configuration synced with master', 'success');
+                })
+                .catch(error => {
+                    console.error('Failed to load configuration', error);
+                    setConfigStatus('Failed to load configuration', 'error');
+                });
+        }
+
+        function renderUrlInputs() {
+            const container = document.getElementById('urlList');
+            if (!container) return;
+
+            if (!currentConfig.urls || currentConfig.urls.length === 0) {
+                currentConfig.urls = [''];
+            }
+
+            container.innerHTML = currentConfig.urls.map((url, index) => {
+                const value = escapeHtml(url || '');
+                return '<div class="flex gap-3 items-center">' +
+                    '<div class="flex-1">' +
+                    '<input type="text" data-url-input data-index="' + index + '" value="' + value + '" ' +
+                    'placeholder="https://example.com" class="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400" ' +
+                    'oninput="updateUrlValue(' + index + ', this.value)">' +
+                    '</div>' +
+                    '<button type="button" onclick="removeUrlField(' + index + ')" class="text-gray-500 hover:text-red-600 p-2 rounded-full border border-transparent hover:border-red-200" title="Remove URL">' +
+                    '<i data-lucide="trash-2" class="w-4 h-4"></i>' +
+                    '</button>' +
+                    '</div>';
+            }).join('');
+
+            lucide.createIcons();
+        }
+
+        function addUrlField() {
+            if (!currentConfig.urls) {
+                currentConfig.urls = [];
+            }
+            currentConfig.urls.push('');
+            renderUrlInputs();
+        }
+
+        function removeUrlField(index) {
+            if (!currentConfig.urls) return;
+            currentConfig.urls.splice(index, 1);
+            if (currentConfig.urls.length === 0) {
+                currentConfig.urls.push('');
+            }
+            renderUrlInputs();
+        }
+
+        function updateUrlValue(index, value) {
+            if (!currentConfig.urls) return;
+            currentConfig.urls[index] = value;
+        }
+
+        function saveConfig() {
+            const inputs = document.querySelectorAll('[data-url-input]');
+            const urls = Array.from(inputs)
+                .map(input => input.value.trim())
+                .filter(url => url.length > 0);
+
+            if (urls.length === 0) {
+                setConfigStatus('Please enter at least one URL before saving', 'error');
+                return;
+            }
+
+            setConfigStatus('Saving configuration...', 'info');
+
+            fetch('/api/config', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ urls: urls })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    return response.text().then(text => { throw new Error(text || 'Failed to save configuration'); });
+                }
+                return response.json();
+            })
+            .then(() => {
+                currentConfig.urls = urls.slice();
+                setConfigStatus('Configuration saved', 'success');
+            })
+            .catch(error => {
+                console.error('Failed to save configuration', error);
+                setConfigStatus(error.message || 'Failed to save configuration', 'error');
+            });
+        }
+
+        function applyConfigUpdate(cfg, silent = false) {
+            if (!cfg || !Array.isArray(cfg.urls)) {
+                return;
+            }
+
+            currentConfig = { urls: cfg.urls.slice() };
+            renderUrlInputs();
+
+            if (!silent) {
+                setConfigStatus('Configuration updated from master', 'info');
+            }
+        }
+
+        function setConfigStatus(message, state = 'info') {
+            const statusEl = document.getElementById('configStatus');
+            if (!statusEl) return;
+
+            if (configStatusTimeout) {
+                clearTimeout(configStatusTimeout);
+                configStatusTimeout = null;
+            }
+
+            let colorClass = 'text-gray-600';
+            if (state === 'success') {
+                colorClass = 'text-green-600';
+            } else if (state === 'error') {
+                colorClass = 'text-red-600';
+            }
+
+            statusEl.className = 'text-sm mt-3 ' + colorClass;
+            statusEl.textContent = message;
+
+            if (state === 'success') {
+                configStatusTimeout = setTimeout(() => {
+                    statusEl.textContent = '';
+                }, 3000);
+            }
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
         
         function log(message) {
             const logEl = document.getElementById('log');
@@ -564,6 +736,8 @@
             logEl.scrollTop = logEl.scrollHeight;
         }
         
+        renderUrlInputs();
+        loadConfig();
         connect();
         setInterval(refreshClients, 5000); // Refresh every 5 seconds
     </script>

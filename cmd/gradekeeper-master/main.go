@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"gradekeeper/internal/config"
 	"gradekeeper/internal/templates"
 )
 
@@ -42,7 +43,7 @@ type ClientInfo struct {
 	LastSeen      time.Time `json:"lastSeen"`
 	FirstSeen     time.Time `json:"firstSeen"`
 	LastHeartbeat time.Time `json:"lastHeartbeat"`
-	Action        string    `json:"action"`        // Current/last action: "setup", "setupAll", "clear", etc.
+	Action        string    `json:"action"`       // Current/last action: "setup", "setupAll", "clear", etc.
 	ActionStatus  string    `json:"actionStatus"` // "running", "success", "failed"
 	ActionError   string    `json:"actionError"`  // Error message if failed
 }
@@ -53,9 +54,12 @@ type Master struct {
 	dashboardConns    map[*websocket.Conn]bool
 	clientsMu         sync.RWMutex
 	dashboardMu       sync.RWMutex
+	configMu          sync.RWMutex
 	upgrader          websocket.Upgrader
 	dashboardSecret   string
 	storageFile       string
+	configFile        string
+	appConfig         config.AppConfig
 	dashboardTemplate *templates.Dashboard
 }
 
@@ -67,9 +71,9 @@ func NewMaster() *Master {
 	}
 
 	m := &Master{
-		clients:         make(map[string]*websocket.Conn),
-		clientsInfo:     make(map[string]*ClientInfo),
-		dashboardConns:  make(map[*websocket.Conn]bool),
+		clients:        make(map[string]*websocket.Conn),
+		clientsInfo:    make(map[string]*ClientInfo),
+		dashboardConns: make(map[*websocket.Conn]bool),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true // Allow all origins for development
@@ -77,15 +81,18 @@ func NewMaster() *Master {
 		},
 		dashboardSecret:   generateRandomSecret(),
 		storageFile:       "gradekeeper-clients.json",
+		configFile:        "gradekeeper-config.json",
+		appConfig:         config.DefaultAppConfig(),
 		dashboardTemplate: dashboardTemplate,
 	}
-	
+
 	// Load existing client data
 	m.loadClientData()
-	
+	m.loadConfig()
+
 	// Start heartbeat monitor
 	go m.monitorHeartbeats()
-	
+
 	return m
 }
 
@@ -111,6 +118,118 @@ func (m *Master) loadClientData() {
 	}
 
 	log.Printf("Loaded %d client records from storage", len(clients))
+}
+
+func (m *Master) loadConfig() {
+	data, err := os.ReadFile(m.configFile)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("Error reading config file: %v", err)
+		}
+		m.configMu.Lock()
+		m.appConfig = config.DefaultAppConfig()
+		m.configMu.Unlock()
+		return
+	}
+
+	var cfg config.AppConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		log.Printf("Error parsing config file, using defaults: %v", err)
+		cfg = config.DefaultAppConfig()
+	} else {
+		cfg = config.MergeWithDefaults(cfg)
+	}
+
+	m.configMu.Lock()
+	m.appConfig = cfg
+	m.configMu.Unlock()
+}
+
+func (m *Master) saveConfig() error {
+	m.configMu.RLock()
+	cfg := m.appConfig
+	m.configMu.RUnlock()
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(m.configFile, data, 0644); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *Master) updateConfig(newCfg config.AppConfig) error {
+	cfg := config.Normalize(newCfg)
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+
+	m.configMu.Lock()
+	m.appConfig = cfg
+	m.configMu.Unlock()
+
+	if err := m.saveConfig(); err != nil {
+		return err
+	}
+
+	m.broadcastConfigUpdate()
+	return nil
+}
+
+func (m *Master) currentConfig() config.AppConfig {
+	m.configMu.RLock()
+	defer m.configMu.RUnlock()
+
+	urls := make([]string, len(m.appConfig.URLs))
+	copy(urls, m.appConfig.URLs)
+
+	return config.AppConfig{
+		URLs: urls,
+	}
+}
+
+func (m *Master) broadcastConfigUpdate() {
+	cfg := m.currentConfig()
+	msg := Message{
+		Type:      "config_update",
+		Data:      cfg,
+		Timestamp: time.Now(),
+	}
+
+	m.clientsMu.RLock()
+	for clientID, conn := range m.clients {
+		if err := conn.WriteJSON(msg); err != nil {
+			log.Printf("Error sending config to client %s: %v", clientID, err)
+		}
+	}
+	m.clientsMu.RUnlock()
+
+	m.broadcastToDashboard(msg)
+}
+
+func (m *Master) sendConfigToClient(clientID string) {
+	cfg := m.currentConfig()
+	msg := Message{
+		Type:      "config_update",
+		Data:      cfg,
+		Timestamp: time.Now(),
+	}
+
+	m.clientsMu.RLock()
+	conn, exists := m.clients[clientID]
+	m.clientsMu.RUnlock()
+
+	if !exists {
+		return
+	}
+
+	if err := conn.WriteJSON(msg); err != nil {
+		log.Printf("Error sending config to client %s: %v", clientID, err)
+	}
 }
 
 func (m *Master) saveClientData() {
@@ -140,7 +259,7 @@ func (m *Master) monitorHeartbeats() {
 	for range ticker.C {
 		now := time.Now()
 		m.clientsMu.Lock()
-		
+
 		var disconnectedClients []string
 		for clientID, clientInfo := range m.clientsInfo {
 			// Check if client is supposed to be connected but hasn't sent heartbeat recently
@@ -150,7 +269,7 @@ func (m *Master) monitorHeartbeats() {
 					clientInfo.Status = "disconnected"
 					clientInfo.LastSeen = now
 					disconnectedClients = append(disconnectedClients, clientID)
-					
+
 					// Also remove from active connections if present
 					if conn, exists := m.clients[clientID]; exists {
 						conn.Close()
@@ -159,13 +278,13 @@ func (m *Master) monitorHeartbeats() {
 				}
 			}
 		}
-		
+
 		m.clientsMu.Unlock()
-		
+
 		// Log and notify dashboard of disconnected clients
 		for _, clientID := range disconnectedClients {
 			log.Printf("Client %s marked as disconnected due to heartbeat timeout", clientID)
-			
+
 			// Notify dashboards
 			m.broadcastToDashboard(Message{
 				Type: "client-disconnected",
@@ -177,7 +296,7 @@ func (m *Master) monitorHeartbeats() {
 				Timestamp: now,
 			})
 		}
-		
+
 		if len(disconnectedClients) > 0 {
 			m.saveClientData()
 		}
@@ -186,14 +305,14 @@ func (m *Master) monitorHeartbeats() {
 
 func (m *Master) cleanup() {
 	log.Println("Cleaning up...")
-	
+
 	// Clear the clients storage file
 	if err := os.Remove(m.storageFile); err != nil && !os.IsNotExist(err) {
 		log.Printf("Warning: Could not remove client storage file: %v", err)
 	} else if err == nil {
 		log.Println("Client storage file cleared successfully")
 	}
-	
+
 	// Close all client connections
 	m.clientsMu.Lock()
 	for clientID, conn := range m.clients {
@@ -201,14 +320,14 @@ func (m *Master) cleanup() {
 		log.Printf("Closed connection to client: %s", clientID)
 	}
 	m.clientsMu.Unlock()
-	
+
 	// Close all dashboard connections
 	m.dashboardMu.Lock()
 	for conn := range m.dashboardConns {
 		conn.Close()
 	}
 	m.dashboardMu.Unlock()
-	
+
 	log.Println("Cleanup completed")
 }
 
@@ -227,37 +346,37 @@ func (m *Master) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Check if this is a dashboard connection attempt
 	if dashboardAuth != "" {
 		if dashboardAuth == m.dashboardSecret {
-		// This is a dashboard connection
-		m.dashboardMu.Lock()
-		m.dashboardConns[conn] = true
-		m.dashboardMu.Unlock()
+			// This is a dashboard connection
+			m.dashboardMu.Lock()
+			m.dashboardConns[conn] = true
+			m.dashboardMu.Unlock()
 
-		log.Println("Dashboard connected")
+			log.Println("Dashboard connected")
 
-		// Send welcome message for dashboard
-		welcomeMsg := Message{
-			Type:      "dashboard-welcome",
-			Data:      map[string]string{"type": "dashboard"},
-			Timestamp: time.Now(),
-		}
-		conn.WriteJSON(welcomeMsg)
-
-		// Handle messages from dashboard (if any)
-		for {
-			var msg Message
-			err := conn.ReadJSON(&msg)
-			if err != nil {
-				log.Printf("Dashboard disconnected: %v", err)
-				break
+			// Send welcome message for dashboard
+			welcomeMsg := Message{
+				Type:      "dashboard-welcome",
+				Data:      map[string]string{"type": "dashboard"},
+				Timestamp: time.Now(),
 			}
-			// Dashboard messages can be handled here if needed
-		}
+			conn.WriteJSON(welcomeMsg)
 
-		// Remove dashboard connection on disconnect
-		m.dashboardMu.Lock()
-		delete(m.dashboardConns, conn)
-		m.dashboardMu.Unlock()
-		return
+			// Handle messages from dashboard (if any)
+			for {
+				var msg Message
+				err := conn.ReadJSON(&msg)
+				if err != nil {
+					log.Printf("Dashboard disconnected: %v", err)
+					break
+				}
+				// Dashboard messages can be handled here if needed
+			}
+
+			// Remove dashboard connection on disconnect
+			m.dashboardMu.Lock()
+			delete(m.dashboardConns, conn)
+			m.dashboardMu.Unlock()
+			return
 		} else {
 			// Invalid dashboard authentication
 			log.Printf("Dashboard connection with invalid authentication: %s", dashboardAuth)
@@ -274,17 +393,17 @@ func (m *Master) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	m.clientsMu.Lock()
-	
+
 	// Check if client is already connected
 	if _, exists := m.clients[clientID]; exists {
 		log.Printf("Client %s attempted to connect but is already connected, rejecting new connection", clientID)
 		m.clientsMu.Unlock()
-		
+
 		// Send rejection message before closing
 		rejectMsg := Message{
 			Type: "error",
 			Data: map[string]interface{}{
-				"error": "duplicate_connection",
+				"error":   "duplicate_connection",
 				"message": "A connection with this client ID already exists",
 			},
 			Timestamp: time.Now(),
@@ -293,9 +412,9 @@ func (m *Master) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 		return
 	}
-	
+
 	m.clients[clientID] = conn
-	
+
 	// Update or create client info
 	now := time.Now()
 	if clientInfo, exists := m.clientsInfo[clientID]; exists {
@@ -315,7 +434,7 @@ func (m *Master) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	m.clientsMu.Unlock()
-	
+
 	// Save updated client data
 	m.saveClientData()
 
@@ -325,7 +444,7 @@ func (m *Master) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	m.broadcastToDashboard(Message{
 		Type: "client-connected",
 		Data: map[string]interface{}{
-			"clientId": clientID,
+			"clientId":     clientID,
 			"totalClients": len(m.clients),
 		},
 		Timestamp: time.Now(),
@@ -338,6 +457,7 @@ func (m *Master) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		Timestamp: time.Now(),
 	}
 	conn.WriteJSON(welcomeMsg)
+	m.sendConfigToClient(clientID)
 
 	// Handle messages from client
 	for {
@@ -360,7 +480,7 @@ func (m *Master) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	clientCount := len(m.clients)
 	m.clientsMu.Unlock()
-	
+
 	// Save updated client data
 	m.saveClientData()
 
@@ -368,7 +488,7 @@ func (m *Master) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	m.broadcastToDashboard(Message{
 		Type: "client-disconnected",
 		Data: map[string]interface{}{
-			"clientId": clientID,
+			"clientId":     clientID,
 			"totalClients": clientCount,
 		},
 		Timestamp: time.Now(),
@@ -392,8 +512,8 @@ func (m *Master) handleClientMessage(clientID string, msg Message) {
 		// Client sending file data response
 		log.Printf("Client %s file response", clientID)
 		m.broadcastToDashboard(Message{
-			Type: "file_data",
-			Data: msg.Data,
+			Type:      "file_data",
+			Data:      msg.Data,
 			Timestamp: time.Now(),
 		})
 	case "heartbeat":
@@ -409,6 +529,8 @@ func (m *Master) handleClientMessage(clientID string, msg Message) {
 		}
 		m.clientsMu.Unlock()
 		m.saveClientData()
+	case "config_request":
+		m.sendConfigToClient(clientID)
 	}
 }
 
@@ -480,8 +602,8 @@ func (m *Master) broadcastCommand(cmd Command) {
 	m.broadcastToDashboard(Message{
 		Type: "command-sent",
 		Data: map[string]interface{}{
-			"action": cmd.Action,
-			"target": cmd.Target,
+			"action":      cmd.Action,
+			"target":      cmd.Target,
 			"clientCount": len(m.clients),
 		},
 		Timestamp: time.Now(),
@@ -509,12 +631,12 @@ func (m *Master) getAllClients() []ClientInfo {
 	for _, clientInfo := range m.clientsInfo {
 		clients = append(clients, *clientInfo)
 	}
-	
+
 	// Sort clients by ID for consistent ordering
 	sort.Slice(clients, func(i, j int) bool {
 		return clients[i].ID < clients[j].ID
 	})
-	
+
 	return clients
 }
 
@@ -526,12 +648,12 @@ func generateRandomSecret() string {
 
 func (m *Master) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
-	
+
 	// Prepare template data
 	data := templates.DashboardData{
 		DashboardSecret: m.dashboardSecret,
 	}
-	
+
 	// Render the dashboard template
 	if err := m.dashboardTemplate.Render(w, data); err != nil {
 		log.Printf("Error rendering dashboard template: %v", err)
@@ -571,7 +693,7 @@ func (m *Master) handleAPIFiles(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		ClientID string `json:"clientId"`
-		Action   string `json:"action"` // "list" or "get"
+		Action   string `json:"action"`             // "list" or "get"
 		FilePath string `json:"filePath,omitempty"` // for "get" action
 	}
 
@@ -615,6 +737,38 @@ func (m *Master) handleAPIFiles(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "command_sent"})
 }
 
+func (m *Master) handleAPIConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		cfg := m.currentConfig()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(cfg)
+	case http.MethodPut:
+		var cfg config.AppConfig
+		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+
+		cfg = config.Normalize(cfg)
+		if err := cfg.Validate(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if err := m.updateConfig(cfg); err != nil {
+			log.Printf("Failed to update config: %v", err)
+			http.Error(w, "Failed to save config", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func main() {
 	master := NewMaster()
 
@@ -627,6 +781,7 @@ func main() {
 	http.HandleFunc("/api/command", master.handleAPICommand)
 	http.HandleFunc("/api/clients", master.handleAPIClients)
 	http.HandleFunc("/api/files", master.handleAPIFiles)
+	http.HandleFunc("/api/config", master.handleAPIConfig)
 
 	fmt.Println("🎓 GradeKeeper Master Server starting...")
 	fmt.Println("📊 Dashboard: http://localhost:8080")
@@ -644,9 +799,9 @@ func main() {
 	// Wait for shutdown signal
 	<-sigChan
 	fmt.Println("\n🛑 Shutdown signal received...")
-	
+
 	// Perform cleanup
 	master.cleanup()
-	
+
 	fmt.Println("👋 GradeKeeper Master Server stopped gracefully")
 }

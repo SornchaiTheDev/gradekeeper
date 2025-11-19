@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -40,7 +42,7 @@ const (
 // Beautiful logging functions
 func logInfo(format string, args ...interface{}) {
 	timestamp := time.Now().Format("15:04:05")
-	fmt.Printf("%s[%s]%s %s%s%s %s\n", 
+	fmt.Printf("%s[%s]%s %s%s%s %s\n",
 		ColorDim, timestamp, ColorReset,
 		ColorBlue, "ℹ", ColorReset,
 		fmt.Sprintf(format, args...))
@@ -48,7 +50,7 @@ func logInfo(format string, args ...interface{}) {
 
 func logSuccess(format string, args ...interface{}) {
 	timestamp := time.Now().Format("15:04:05")
-	fmt.Printf("%s[%s]%s %s%s%s %s\n", 
+	fmt.Printf("%s[%s]%s %s%s%s %s\n",
 		ColorDim, timestamp, ColorReset,
 		ColorGreen, "✓", ColorReset,
 		fmt.Sprintf(format, args...))
@@ -56,7 +58,7 @@ func logSuccess(format string, args ...interface{}) {
 
 func logWarning(format string, args ...interface{}) {
 	timestamp := time.Now().Format("15:04:05")
-	fmt.Printf("%s[%s]%s %s%s%s %s\n", 
+	fmt.Printf("%s[%s]%s %s%s%s %s\n",
 		ColorDim, timestamp, ColorReset,
 		ColorYellow, "⚠", ColorReset,
 		fmt.Sprintf(format, args...))
@@ -64,7 +66,7 @@ func logWarning(format string, args ...interface{}) {
 
 func logError(format string, args ...interface{}) {
 	timestamp := time.Now().Format("15:04:05")
-	fmt.Printf("%s[%s]%s %s%s%s %s\n", 
+	fmt.Printf("%s[%s]%s %s%s%s %s\n",
 		ColorDim, timestamp, ColorReset,
 		ColorRed, "✗", ColorReset,
 		fmt.Sprintf(format, args...))
@@ -72,7 +74,7 @@ func logError(format string, args ...interface{}) {
 
 func logDebug(format string, args ...interface{}) {
 	timestamp := time.Now().Format("15:04:05")
-	fmt.Printf("%s[%s]%s %s%s%s %s\n", 
+	fmt.Printf("%s[%s]%s %s%s%s %s\n",
 		ColorDim, timestamp, ColorReset,
 		ColorPurple, "🔧", ColorReset,
 		fmt.Sprintf(format, args...))
@@ -80,7 +82,7 @@ func logDebug(format string, args ...interface{}) {
 
 func logHeartbeat() {
 	timestamp := time.Now().Format("15:04:05")
-	fmt.Printf("%s[%s]%s %s%s%s %sHeartbeat sent%s\n", 
+	fmt.Printf("%s[%s]%s %s%s%s %sHeartbeat sent%s\n",
 		ColorDim, timestamp, ColorReset,
 		ColorCyan, "💓", ColorReset,
 		ColorDim, ColorReset)
@@ -98,14 +100,16 @@ type Command struct {
 }
 
 type Client struct {
-	conn          *websocket.Conn
-	serverURL     string
-	clientID      string
-	done          chan struct{}
-	reconnect     chan struct{}
-	shutdown      chan struct{}
-	retrying      bool
+	conn               *websocket.Conn
+	serverURL          string
+	clientID           string
+	done               chan struct{}
+	reconnect          chan struct{}
+	shutdown           chan struct{}
+	retrying           bool
 	shouldNotReconnect bool
+	config             config.AppConfig
+	configMu           sync.RWMutex
 }
 
 func NewClient(serverURL string) *Client {
@@ -115,6 +119,7 @@ func NewClient(serverURL string) *Client {
 		done:      make(chan struct{}),
 		reconnect: make(chan struct{}),
 		shutdown:  make(chan struct{}),
+		config:    config.DefaultAppConfig(),
 	}
 }
 
@@ -176,14 +181,33 @@ func (c *Client) connectWithRetry() {
 		// Successfully connected
 		c.retrying = false
 		c.sendStatus("connected")
+		c.requestConfig()
 
 		// Start listening for messages
 		go c.listen()
-		
+
 		// Start heartbeat
 		go c.startHeartbeat()
 		break
 	}
+}
+
+func (c *Client) requestConfig() {
+	if c.conn == nil {
+		return
+	}
+
+	req := Message{
+		Type:      "config_request",
+		Timestamp: time.Now(),
+	}
+
+	if err := c.conn.WriteJSON(req); err != nil {
+		logWarning("Failed to request config from master: %v", err)
+		return
+	}
+
+	logDebug("Requested configuration from master")
 }
 
 func (c *Client) listen() {
@@ -201,7 +225,7 @@ func (c *Client) listen() {
 		err := c.conn.ReadJSON(&msg)
 		if err != nil {
 			logError("WebSocket connection lost: %v", err)
-			
+
 			// Check if we're shutting down before attempting reconnect
 			select {
 			case <-c.shutdown:
@@ -248,6 +272,8 @@ func (c *Client) handleMessage(msg Message) {
 		}
 	case "file_command":
 		c.handleFileCommand(msg)
+	case "config_update":
+		c.handleConfigUpdate(msg.Data)
 	}
 }
 
@@ -255,20 +281,20 @@ func (c *Client) handleError(msg Message) {
 	if errorData, ok := msg.Data.(map[string]interface{}); ok {
 		errorType := errorData["error"].(string)
 		errorMessage := errorData["message"].(string)
-		
+
 		logError("Error from master: %s - %s", errorType, errorMessage)
-		
+
 		if errorType == "duplicate_connection" {
 			fmt.Printf("\n%s%s━━━ DUPLICATE CONNECTION ERROR ━━━%s\n", ColorRed, ColorBold, ColorReset)
 			fmt.Printf("%s%s%s %s\n", ColorRed, "✗", ColorReset, errorMessage)
 			fmt.Printf("%s%s%s Another instance of this client is already connected to the master server.\n", ColorYellow, "⚠", ColorReset)
 			fmt.Printf("%s%s%s Please stop the other instance before running this client.\n", ColorBlue, "ℹ", ColorReset)
-			
+
 			// Set flag to prevent reconnection and exit
 			c.shouldNotReconnect = true
 			os.Exit(1)
 		}
-		
+
 		// Handle other error types here in the future
 		logWarning("Unhandled error type: %s", errorType)
 	}
@@ -277,7 +303,7 @@ func (c *Client) handleError(msg Message) {
 func (c *Client) handleFileCommand(msg Message) {
 	if cmdData, ok := msg.Data.(map[string]interface{}); ok {
 		action := cmdData["action"].(string)
-		
+
 		switch action {
 		case "list":
 			c.handleFileList()
@@ -289,30 +315,52 @@ func (c *Client) handleFileCommand(msg Message) {
 	}
 }
 
+func (c *Client) handleConfigUpdate(data interface{}) {
+	bytes, err := json.Marshal(data)
+	if err != nil {
+		logWarning("Failed to parse config update: %v", err)
+		return
+	}
+
+	var cfg config.AppConfig
+	if err := json.Unmarshal(bytes, &cfg); err != nil {
+		logWarning("Invalid config payload from master: %v", err)
+		return
+	}
+
+	cfg = config.MergeWithDefaults(cfg)
+
+	c.configMu.Lock()
+	c.config = cfg
+	c.configMu.Unlock()
+
+	logSuccess("Configuration updated (%d URLs)", len(cfg.URLs))
+}
+
 func (c *Client) handleFileList() {
 	logInfo("Listing files in DOMJudge directory")
-	
+
 	desktopPath, err := platform.GetDesktopPath()
 	if err != nil {
 		c.sendFileResponse("list", "", nil, err.Error())
 		return
 	}
-	
+
 	domjudgePath := filepath.Join(desktopPath, "DOMJudge")
-	
+
 	// Check if DOMJudge directory exists
 	if _, err := os.Stat(domjudgePath); os.IsNotExist(err) {
 		c.sendFileResponse("list", "", []string{}, "DOMJudge directory not found")
 		return
 	}
-	
+
 	// Read directory contents
 	files, err := ioutil.ReadDir(domjudgePath)
 	if err != nil {
 		c.sendFileResponse("list", "", nil, err.Error())
 		return
 	}
-	
+
 	// Filter for code files (C++, Python, etc.)
 	var fileList []map[string]interface{}
 	for _, file := range files {
@@ -320,54 +368,54 @@ func (c *Client) handleFileList() {
 			ext := strings.ToLower(filepath.Ext(file.Name()))
 			if ext == ".cpp" || ext == ".py" || ext == ".c" || ext == ".cc" || ext == ".cxx" || ext == ".hpp" || ext == ".h" {
 				fileList = append(fileList, map[string]interface{}{
-					"name": file.Name(),
-					"size": file.Size(),
+					"name":     file.Name(),
+					"size":     file.Size(),
 					"modified": file.ModTime(),
-					"ext": ext,
+					"ext":      ext,
 				})
 			}
 		}
 	}
-	
+
 	c.sendFileResponse("list", "", fileList, "")
 }
 
 func (c *Client) handleFileGet(filePath string) {
 	logInfo("Reading file: %s", filePath)
-	
+
 	desktopPath, err := platform.GetDesktopPath()
 	if err != nil {
 		c.sendFileResponse("get", filePath, nil, err.Error())
 		return
 	}
-	
+
 	fullPath := filepath.Join(desktopPath, "DOMJudge", filePath)
-	
+
 	// Security check: ensure the file is within DOMJudge directory
 	domjudgePath := filepath.Join(desktopPath, "DOMJudge")
 	if !strings.HasPrefix(fullPath, domjudgePath) {
 		c.sendFileResponse("get", filePath, nil, "Access denied: file outside DOMJudge directory")
 		return
 	}
-	
+
 	// Read file content
 	content, err := ioutil.ReadFile(fullPath)
 	if err != nil {
 		c.sendFileResponse("get", filePath, nil, err.Error())
 		return
 	}
-	
+
 	// Encode content as base64 to handle binary files safely
 	encodedContent := base64.StdEncoding.EncodeToString(content)
-	
+
 	fileInfo := map[string]interface{}{
-		"name": filepath.Base(filePath),
-		"path": filePath,
+		"name":    filepath.Base(filePath),
+		"path":    filePath,
 		"content": encodedContent,
-		"size": len(content),
-		"ext": strings.ToLower(filepath.Ext(filePath)),
+		"size":    len(content),
+		"ext":     strings.ToLower(filepath.Ext(filePath)),
 	}
-	
+
 	c.sendFileResponse("get", filePath, fileInfo, "")
 }
 
@@ -383,7 +431,7 @@ func (c *Client) sendFileResponse(action, filePath string, data interface{}, err
 		},
 		Timestamp: time.Now(),
 	}
-	
+
 	if err := c.conn.WriteJSON(response); err != nil {
 		logError("Failed to send file response: %v", err)
 	}
@@ -498,14 +546,29 @@ func (c *Client) openVSCodeAction() error {
 
 func (c *Client) openChromeAction() error {
 	logInfo("Opening browser with multiple tabs...")
-	
-	err := platform.OpenBrowserWithTabs(config.DefaultURLs)
+
+	urls := c.currentURLs()
+	err := platform.OpenBrowserWithTabs(urls)
 	if err != nil {
 		return fmt.Errorf("error opening browser: %v", err)
 	}
 
 	logSuccess("Browser opened successfully with multiple tabs in incognito mode!")
 	return nil
+}
+
+func (c *Client) currentURLs() []string {
+	c.configMu.RLock()
+	defer c.configMu.RUnlock()
+
+	urls := make([]string, len(c.config.URLs))
+	copy(urls, c.config.URLs)
+	if len(urls) == 0 {
+		defaultCfg := config.DefaultAppConfig()
+		urls = make([]string, len(defaultCfg.URLs))
+		copy(urls, defaultCfg.URLs)
+	}
+	return urls
 }
 
 func (c *Client) setupAllAction() error {
@@ -651,7 +714,7 @@ func (c *Client) startHeartbeat() {
 				msg := Message{
 					Type: "heartbeat",
 					Data: map[string]interface{}{
-						"clientId": c.clientID,
+						"clientId":  c.clientID,
 						"timestamp": time.Now(),
 					},
 					Timestamp: time.Now(),
@@ -736,7 +799,7 @@ func main() {
 		case <-interrupt:
 			logInfo("Interrupt received, closing connection...")
 			client.retrying = true
-			
+
 			// Signal all goroutines to shutdown
 			close(client.shutdown)
 
@@ -802,7 +865,8 @@ func runStandalone() {
 
 		// Open browser with multiple tabs
 		logInfo("Opening browser with multiple tabs...")
-		err = platform.OpenBrowserWithTabs(config.DefaultURLs)
+		defaultCfg := config.DefaultAppConfig()
+		err = platform.OpenBrowserWithTabs(defaultCfg.URLs)
 		if err != nil {
 			logError("Error opening browser: %v", err)
 		} else {

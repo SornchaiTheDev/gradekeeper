@@ -17,10 +17,10 @@ func main() {
 	// Handle interrupt signal
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
-	
+
 	// Run operations in a goroutine so we can handle interrupts
 	done := make(chan bool, 1)
-	
+
 	go func() {
 		// Get Desktop path (cross-platform)
 		desktopPath, err := platform.GetDesktopPath()
@@ -53,7 +53,8 @@ func main() {
 
 		// Open browser with multiple tabs
 		fmt.Println("Opening browser with multiple tabs...")
-		err = platform.OpenBrowserWithTabs(config.DefaultURLs)
+		defaultCfg := config.DefaultAppConfig()
+		err = platform.OpenBrowserWithTabs(defaultCfg.URLs)
 		if err != nil {
 			fmt.Printf("Error opening browser: %v\n", err)
 		} else {
@@ -63,7 +64,7 @@ func main() {
 		fmt.Println("All tasks completed!")
 		done <- true
 	}()
-	
+
 	// Wait for completion or interrupt
 	select {
 	case success := <-done:

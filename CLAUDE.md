@@ -89,19 +89,9 @@ go build -o dist/gradekeeper-standalone ./cmd/gradekeeper-standalone
 - **Graceful Fallbacks**: Multiple fallback strategies for all external programs
 - **Incognito Mode**: All browser launches use incognito/private browsing mode
 - **Environment Cleanup**: Clear command removes folders and closes applications
-- **Centralized Configuration**: Default URLs managed in `internal/config/config.go`
+- **Centralized Configuration**: Default browser URLs managed via master dashboard with defaults in `internal/config/config.go`
 
 ## Customization
 
-To modify the URLs that open in the browser, edit the `DefaultURLs` slice in `internal/config/config.go`:
-
-```go
-// DefaultURLs contains the default URLs to open in the browser
-var DefaultURLs = []string{
-    "http://your-custom-url-1.com",
-    "http://your-custom-url-2.com",
-    // Add your custom URLs here
-}
-```
-
-This configuration is shared between all components (standalone, client, and master-controlled operations).
+- **Master/Client Mode**: Manage the list of URLs from the *Browser URLs* panel on the master dashboard. Updates are saved by the server and broadcast to every connected client instantly.
+- **Standalone Defaults**: Edit `internal/config/config.go` if you need to change the baked-in defaults that ship with the binaries (used only when no remote configuration exists).
