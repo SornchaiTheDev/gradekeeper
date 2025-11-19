@@ -1,6 +1,8 @@
 'use strict';
 
 const dashboardSecret = document.body.dataset.dashboardSecret || '';
+const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const wsBase = `${wsProtocol}//${window.location.host}/ws`;
 let ws;
 let previousClientIds = new Set();
 let currentConfig = { urls: [] };
@@ -21,7 +23,7 @@ function connect() {
         return;
     }
 
-    ws = new WebSocket('ws://localhost:8080/ws?dashboard=' + dashboardSecret);
+    ws = new WebSocket(`${wsBase}?dashboard=${dashboardSecret}`);
 
     ws.onopen = function() {
         log('Dashboard connected to master server');

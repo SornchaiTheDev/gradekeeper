@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -770,6 +771,9 @@ func (m *Master) handleAPIConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	port := flag.Int("port", 8080, "Port to listen on for the dashboard and APIs")
+	flag.Parse()
+
 	master := NewMaster()
 
 	// Setup signal handling for graceful shutdown
@@ -784,13 +788,15 @@ func main() {
 	http.HandleFunc("/api/files", master.handleAPIFiles)
 	http.HandleFunc("/api/config", master.handleAPIConfig)
 
+	addr := fmt.Sprintf(":%d", *port)
+
 	fmt.Println("🎓 GradeKeeper Master Server starting...")
-	fmt.Println("📊 Dashboard: http://localhost:8080")
-	fmt.Println("🔌 WebSocket: ws://localhost:8080/ws")
+	fmt.Printf("📊 Dashboard: http://localhost:%d\n", *port)
+	fmt.Printf("🔌 WebSocket: ws://localhost:%d/ws\n", *port)
 	fmt.Printf("🔐 Dashboard Secret: %s\n", master.dashboardSecret)
 
 	// Start the server in a goroutine
-	server := &http.Server{Addr: ":8080"}
+	server := &http.Server{Addr: addr}
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed to start: %v", err)
